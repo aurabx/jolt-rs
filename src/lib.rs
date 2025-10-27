@@ -5,10 +5,8 @@ mod remove;
 mod pointer;
 mod transform;
 mod error;
-#[cfg(not(feature = "fuzz"))]
-mod dsl;
-#[cfg(feature = "fuzz")]
 pub mod dsl;
+pub mod fuzz;
 
 use serde_json::{Map, Value};
 use serde_json::map::Entry;

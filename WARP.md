@@ -62,11 +62,16 @@ cargo bench
 
 ### Fuzzing
 ```bash
-# Note: Makefile has incorrect path (fluvio-jolt), run manually:
-cd harmony-jolt && cargo +nightly fuzz run fuzz_target_1
+# Build fuzzer binary
+cargo build --features fuzzing --bin fuzz_target_1
+
+# Run with cargo-fuzz (requires nightly toolchain)
+cargo +nightly fuzz run fuzz_target_1
+
+# Or run the binary directly with libfuzzer arguments
+cargo +nightly run --features fuzzing --bin fuzz_target_1
 
 # Requires: cargo install cargo-fuzz
-# Requires: nightly toolchain
 ```
 
 ## Architecture
@@ -179,10 +184,11 @@ cargo test --test java::shift
 ### Important Details
 - **Crate types**: `['cdylib', 'rlib']` - supports both C FFI and Rust library usage
 - **Feature flags**:
-  - `fuzz`: Exposes internal DSL module for fuzzing (conditional compilation)
+  - `fuzzing`: Enables libfuzzer-sys dependency and fuzz module for fuzzing support
 - **Dependencies**:
   - `serde_json` with `preserve_order` feature (maintains key order)
   - `thiserror` for error types
+  - `libfuzzer-sys` (optional, enabled with `fuzzing` feature)
 - **Rustfmt**: `reorder_modules = false`, `reorder_imports = false`
 
 ### Workspace Structure
@@ -227,14 +233,6 @@ Transformations fail fast on:
 - Type mismatches in expressions
 
 ## Project-Specific Notes
-
-### Makefile Issue
-The Makefile contains an outdated reference in the `fuzz-parser` target:
-```makefile
-fuzz-parser:
-	cd fluvio-jolt && cargo +nightly fuzz run fuzz_target_1
-```
-Should reference `harmony-jolt` instead. Run manually from `harmony-jolt/` directory.
 
 ### Fork Origin
 This is a fork of Fluvio Jolt (archived March 2, 2025). Maintains compatibility with Java JOLT library while being implemented in Rust.

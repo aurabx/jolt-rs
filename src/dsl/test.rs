@@ -5,7 +5,7 @@ struct LhsTestCase<'a> {
     expected: Lhs,
 }
 
-impl<'a> LhsTestCase<'a> {
+impl LhsTestCase<'_> {
     pub fn run(&self) {
         let output = match Lhs::parse(self.expr) {
             Ok(output) => output,
@@ -247,7 +247,7 @@ struct RhsTestCase<'a> {
     expected: Rhs,
 }
 
-impl<'a> RhsTestCase<'a> {
+impl RhsTestCase<'_> {
     pub fn run(&self) {
         let output = match Rhs::parse(self.expr) {
             Ok(output) => output,

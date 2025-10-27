@@ -33,7 +33,7 @@ pub enum REntry {
 
 struct RhsVisitor;
 
-impl<'de> Visitor<'de> for RhsVisitor {
+impl Visitor<'_> for RhsVisitor {
     type Value = Rhs;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -179,7 +179,7 @@ impl<'de> Deserialize<'de> for Object {
 
 struct LhsVisitor;
 
-impl<'de> Visitor<'de> for LhsVisitor {
+impl Visitor<'_> for LhsVisitor {
     type Value = Lhs;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

@@ -232,7 +232,7 @@ impl TransformSpec {
 }
 
 impl Spec {
-    pub(crate) fn iter(&self) -> SpecIter {
+    pub(crate) fn iter(&self) -> SpecIter<'_> {
         SpecIter::new(self)
     }
 }

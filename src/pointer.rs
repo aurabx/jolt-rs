@@ -9,7 +9,7 @@ pub(crate) struct JsonPointer {
 
 impl JsonPointer {
     pub(crate) fn new(mut entries: Vec<String>) -> Self {
-        if entries.first().filter(|p| (**p).eq("")).is_none() {
+        if entries.first().filter(|p| p.is_empty()).is_none() {
             entries.insert(0, String::new());
         }
         Self { entries }

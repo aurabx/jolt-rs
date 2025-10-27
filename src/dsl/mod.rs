@@ -9,5 +9,5 @@ mod test;
 mod chars;
 
 pub use error::ParseError;
-pub use ast::{Rhs, Lhs, RhsEntry, IndexOp, RhsPart};
+pub use ast::{Lhs, Rhs, RhsEntry, IndexOp, RhsPart};
 pub use deserialize::{InfallibleLhs, Object, REntry};
