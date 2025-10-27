@@ -1,4 +1,4 @@
-<h1 align="center">Fluvio Jolt JSON library</h1>
+<h1 align="center">Harmony Jolt JSON library</h1>
 <div align="center">
  <strong>
     JSON to JSON transformation Rust library
@@ -7,25 +7,29 @@
 
 <div align="center">
    <!-- CI status -->
-  <a href="https://github.com/infinyon/fluvio-jolt/actions">
-    <img src="https://github.com/infinyon/fluvio-jolt/workflows/CI/badge.svg"
+  <a href="https://github.com/aurabx/harmony-jolt/actions">
+    <img src="https://github.com/aurabx/harmony-jolt/workflows/CI/badge.svg"
       alt="CI Status" />
   </a>
   <!-- Crates version -->
-  <a href="https://crates.io/crates/fluvio-jolt">
-    <img src="https://img.shields.io/crates/v/fluvio-jolt?style=flat-square"
+  <a href="https://crates.io/crates/harmony-jolt">
+    <img src="https://img.shields.io/crates/v/harmony-jolt?style=flat-square"
     alt="Crates.io version" />
   </a>
   <!-- Downloads -->
-  <a href="https://crates.io/crates/fluvio-jolt">
-    <img src="https://img.shields.io/crates/d/fluvio-jolt.svg?style=flat-square"
+  <a href="https://crates.io/crates/harmony-jolt">
+    <img src="https://img.shields.io/crates/d/harmony-jolt.svg?style=flat-square"
       alt="Download" />
   </a>
   <!-- docs.rs docs -->
-  <a href="https://docs.rs/fluvio-jolt">
-    <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square"
-      alt="docs.rs docs" />
-  </a>
+
+[//]: # (  <a href="https://docs.rs/harmony-jolt">)
+
+[//]: # (    <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square")
+
+[//]: # (      alt="docs.rs docs" />)
+
+[//]: # (  </a>)
 </div>
 
 ## Overview
@@ -33,18 +37,20 @@ JSON to JSON transformation where the "specification" for the transform is itsel
 
 Port of Java [Jolt](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java)  library written in Rust.
 
+This is a fork of [Fluvio Jolt](https://github.com/infinyon/fluvio-jolt), created by the Fluvio team. That project was archived on March 2nd 2025.
+
 
 ## Usage Example
-Add `fluvio-jolt` crate to your `Cargo.toml` file:
+Add `harmony-jolt` crate to your `Cargo.toml` file:
 ```toml
 [dependencies]
-fluvio-jolt = { version = "0.3"}
+harmony-jolt = { version = "0.3"}
 ```
 
 Then, for example, if you want to repack your JSON record, you can do the following:
 ```rust
 use serde_json::{json, Value};
-use fluvio_jolt::{transform, TransformSpec};
+use harmony_jolt::{transform, TransformSpec};
 
 let input: Value = serde_json::from_str(r#"
     {
@@ -93,7 +99,7 @@ Composes a list of operation specifications. Each operation has its own DSL (Dom
 Language) in order to facilitate its narrow job.
 
 ```
-use fluvio_jolt::TransformSpec;
+use harmony_jolt::TransformSpec;
 
 let spec: TransformSpec =
 serde_json::from_str(r#"[

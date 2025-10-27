@@ -37,7 +37,7 @@ pub use error::{Error, Result};
 /// For example, if you want to repack your JSON record, you can do the following:
 /// ```
 /// use serde_json::{json, Value};
-/// use fluvio_jolt::{transform, TransformSpec};
+/// use harmony_jolt::{transform, TransformSpec};
 ///
 /// let input: Value = serde_json::from_str(r#"
 ///     {

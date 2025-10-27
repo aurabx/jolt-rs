@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use fluvio_jolt::{TransformSpec, transform};
+use harmony_jolt::{TransformSpec, transform};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 

@@ -1,7 +1,7 @@
 use std::fs::File;
 use serde_json::Value;
 use serde::Deserialize;
-use fluvio_jolt::TransformSpec;
+use harmony_jolt::TransformSpec;
 
 mod java;
 
@@ -46,7 +46,7 @@ fn do_test(name: &str) {
         .unwrap_or_else(|err| panic!("unable to parse file for test `{}`: {:?}", name, err));
 
     //when
-    let result = fluvio_jolt::transform(input, &spec).unwrap();
+    let result = harmony_jolt::transform(input, &spec).unwrap();
 
     if result != expected {
         panic!(

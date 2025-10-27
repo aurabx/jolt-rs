@@ -8,7 +8,7 @@ use crate::{JsonPointer, shift::Shift};
 /// Language) in order to facilitate its narrow job.
 ///
 /// ```
-/// use fluvio_jolt::TransformSpec;
+/// use harmony_jolt::TransformSpec;
 ///
 /// let spec: TransformSpec =
 /// serde_json::from_str(r#"[

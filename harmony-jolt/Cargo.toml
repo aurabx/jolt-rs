@@ -1,14 +1,14 @@
 [package]
-name = "fluvio-jolt"
+name = "harmony-jolt"
 version = "0.3.1"
 edition = "2021"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-description = "Fluvio JSON to JSON transformation library"
-repository = "https://github.com/infinyon/fluvio-jolt"
+authors = ["Aurabox <hello@aurabox.cloud>"]
+description = "JSON to JSON transformation library using the JOLT spec"
+repository = "https://github.com/aurabx/harmony-jolt"
 license = "Apache-2.0"
 
-[package.metadata.docs.rs]
-all-features = true
+#[package.metadata.docs.rs]
+#all-features = true
 
 [lib]
 crate-type = ['cdylib', 'rlib']

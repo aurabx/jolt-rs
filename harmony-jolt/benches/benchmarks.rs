@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use serde_json::Value;
-use fluvio_jolt::{transform, TransformSpec};
+use harmony_jolt::{transform, TransformSpec};
 
 pub fn transform_benchmark(c: &mut Criterion) {
     let spec: TransformSpec =

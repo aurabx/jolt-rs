@@ -1,7 +1,6 @@
 [workspace]
 members = [
-	"fluvio-jolt",
-	"smartmodule",
+	"harmony-jolt",
 ]
 resolver = "2"
 
