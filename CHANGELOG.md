@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-01-27
+
+### Added
+- **Modifier operations**: New `modify-overwrite-beta` operation for data transformation using functions
+- **String manipulation functions**:
+  - `concat`: Concatenate multiple strings together
+  - `toLower`: Convert string to lowercase
+  - `toUpper`: Convert string to uppercase
+  - `substring`: Extract substring from string (with start and end indices)
+  - `trim`: Remove leading and trailing whitespace
+  - `join`: Join array elements with a separator
+- **Path expression support**: `@(level,path)` syntax for accessing values at different tree levels
+- **Context references**: `^identifier` syntax for accessing context values
+- **Modifier variants**: Support for `modify-overwrite-beta`, `modify-default-beta`, and `modify-define-beta`
+- Function parsing with support for:
+  - String literals in single quotes: `'hello'`
+  - Path expressions: `@(1,name[0])`
+  - Context references: `^value`
+  - Identifiers and numeric literals
+- Comprehensive test coverage:
+  - 16 new unit tests for modifier operations
+  - Integration test for real-world concat use case
+  - Downloaded 37 Java JOLT modifier test files for future compatibility testing
+- Example code demonstrating concat usage (`examples/concat_example.rs`)
+
+### Changed
+- Transform pipeline now supports 4 operations: `shift`, `default`, `modify`, `remove`
+- Execution order: Shift → Default → Modify → Remove
+- Updated documentation with modifier operations section
+- Added error types: `InvalidFunction`, `FunctionArgumentError`, `PathEvaluationError`
+
+### Technical Details
+- New `src/modifier/` module with submodules:
+  - `function_parser`: Parses function call syntax
+  - `functions`: Implements all string manipulation functions
+  - `evaluator`: Handles path expression evaluation and tree traversal
+  - `operation`: Implements modifier operation variants
+- Proper tree level navigation for nested specs
+- Support for array and object path navigation (`name[0]`, `lower.leading`)
+
 ## [0.4.0] - 2025-01-27
 
 ### Note
