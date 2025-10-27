@@ -44,7 +44,7 @@ This is a fork of [Fluvio Jolt](https://github.com/infinyon/fluvio-jolt), create
 Add `harmony-jolt` crate to your `Cargo.toml` file:
 ```toml
 [dependencies]
-harmony-jolt = { version = "0.3"}
+harmony-jolt = { version = "0.4"}
 ```
 
 Then, for example, if you want to repack your JSON record, you can do the following:
