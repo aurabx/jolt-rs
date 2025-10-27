@@ -24,6 +24,7 @@ fn test_all() {
         "variables",
         "from_benchmark",
         "nested_variables",
+        "modifier_concat_names",
     ];
     for name in tests {
         do_test(name);

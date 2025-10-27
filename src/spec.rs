@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
-use crate::{JsonPointer, shift::Shift};
+use crate::{JsonPointer, shift::Shift, modifier::ModifierSpec};
 
 /// The JSON transformation specification.
 ///
@@ -210,10 +210,16 @@ pub struct TransformSpec(Vec<SpecEntry>);
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(tag = "operation", content = "spec")]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum SpecEntry {
     Shift(Shift),
     Default(Spec),
+    #[serde(
+        alias = "modify-overwrite-beta",
+        alias = "modify-default-beta",
+        alias = "modify-define-beta"
+    )]
+    Modify(ModifierSpec),
     Remove(Spec),
 }
 

@@ -1,0 +1,35 @@
+{
+  "input": {
+    "customer": {
+      "firstName": "John",
+      "lastName": "Doe",
+      "contact": {
+        "email": "john@example.com"
+      }
+    }
+  },
+  "spec": [
+    {
+      "operation": "shift",
+      "spec": {
+        "customer": {
+          "firstName": "name[0]",
+          "lastName": "name[1]",
+          "contact": {
+            "email": "email"
+          }
+        }
+      }
+    },
+    {
+      "operation": "modify-overwrite-beta",
+      "spec": {
+        "name": "=concat(@(1,name[0]),' ',@(1,name[1]))"
+      }
+    }
+  ],
+  "expected": {
+    "name": "John Doe",
+    "email": "john@example.com"
+  }
+}

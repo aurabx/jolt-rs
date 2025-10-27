@@ -89,7 +89,8 @@ assert_eq!(output, json!({
 ## Supported Operations
 1. `shift`: copy data from the input tree and put it the output tree
 2. `default`: apply default values to the tree
-3. `remove`: remove data from the tree
+3. `modify-overwrite-beta`: modify data using functions (concat, toLower, toUpper, substring, trim, join)
+4. `remove`: remove data from the tree
 
 See `SPEC.md` for more info on specifics of execution order and DSL grammar.
 
@@ -291,6 +292,70 @@ the output JSON will be:
 }
 </pre>
 As you can see, the field `mobile` remains not affected while the `code` has a default '+1' value.
+
+### `Modifier` operations
+The `modify-overwrite-beta` operation allows you to modify values using functions. This is useful for string manipulation, data transformation, and combining values.
+
+#### Supported Functions
+- **`concat`**: Concatenate multiple strings
+- **`toLower`**: Convert string to lowercase
+- **`toUpper`**: Convert string to uppercase
+- **`substring`**: Extract a substring (start, end)
+- **`trim`**: Remove leading/trailing whitespace
+- **`join`**: Join array elements with a separator
+
+#### Example: Concatenating Names
+For example, given this input JSON:
+<pre>
+{
+    "customer": {
+        "firstName": "John",
+        "lastName": "Doe"
+    }
+}
+</pre>
+
+You can use `shift` to restructure and `modify-overwrite-beta` with `concat` to combine the names:
+<pre>
+[
+    {
+        "operation": "shift",
+        "spec": {
+            "customer": {
+                "firstName": "name[0]",
+                "lastName": "name[1]"
+            }
+        }
+    },
+    {
+        "operation": "modify-overwrite-beta",
+        "spec": {
+            "name": "=concat(@(1,name[0]),' ',@(1,name[1]))"
+        }
+    }
+]
+</pre>
+
+This produces:
+<pre>
+{
+    "name": "John Doe"
+}
+</pre>
+
+The `@(level,path)` syntax means "go up `level` levels in the tree, then access `path`". In this case, `@(1,name[0])` goes up 1 level from the current position to access the root, then gets `name[0]`.
+
+#### Function Syntax
+Functions are specified using the `=functionName(args...)` syntax:
+- **Literals**: Single-quoted strings like `' '` or `'_'`
+- **Path expressions**: `@(level,path)` to reference values
+- **Context references**: `^value` to reference context values
+- **Identifiers**: Unquoted values that will be looked up
+
+#### Modifier Variants
+- **`modify-overwrite-beta`**: Always writes the result, overwriting existing values
+- **`modify-default-beta`**: Only writes if the key doesn't exist
+- **`modify-define-beta`**: Only writes if the key doesn't exist or is null
 
 ### `Remove` operation
 Removes content from the input JSON.

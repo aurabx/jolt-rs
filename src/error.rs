@@ -29,6 +29,14 @@ pub enum Error {
     ShiftEmptyPath,
     #[error("Path is not empty after executing shift. THIS SHOULD NEVER HAPPEN.")]
     ShiftPathNotEmpty,
+    #[error("Parse error: {0}")]
+    ParseError(String),
+    #[error("Invalid function: {0}")]
+    InvalidFunction(String),
+    #[error("Function argument error: {0}")]
+    FunctionArgumentError(String),
+    #[error("Path evaluation error: {0}")]
+    PathEvaluationError(String),
 }
 
 pub type Result<T> = StdResult<T, Error>;

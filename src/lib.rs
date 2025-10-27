@@ -2,6 +2,7 @@ mod spec;
 mod shift;
 mod default;
 mod remove;
+mod modifier;
 mod pointer;
 mod transform;
 mod error;
@@ -14,6 +15,7 @@ use transform::Transform;
 
 use crate::default::default;
 use crate::remove::remove;
+use crate::modifier::modify;
 use crate::spec::SpecEntry;
 
 pub use spec::TransformSpec;
@@ -31,6 +33,7 @@ pub use error::{Error, Result};
 /// 1. [`shift`](TransformSpec#shift-operation): copy data from the input tree and put it the output tree
 /// 2. [`default`](TransformSpec#default-operation): apply default values to the tree
 /// 3. [`remove`](TransformSpec#remove-operation): remove data from the tree
+/// 4. [`modify`](TransformSpec#modify-operation): modify data using functions like concat, toLower, etc.
 ///
 /// For example, if you want to repack your JSON record, you can do the following:
 /// ```
@@ -79,6 +82,7 @@ pub fn transform(input: Value, spec: &TransformSpec) -> Result<Value> {
         match entry {
             SpecEntry::Shift(shift) => result = shift.apply(&result)?,
             SpecEntry::Default(spec) => result = default(result, spec),
+            SpecEntry::Modify(spec) => result = modify(result, spec)?,
             SpecEntry::Remove(spec) => result = remove(result, spec),
         }
     }
