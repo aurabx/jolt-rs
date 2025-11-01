@@ -2,6 +2,10 @@
 
 This file provides guidance to WARP (warp.dev) when working with code in this repository.
 
+## Important
+
+Always respect the rules defined in .ai/agents.md
+
 ## Overview
 
 `harmony-jolt` is a Rust library for JSON-to-JSON transformations using the JOLT specification. It's a fork of the archived Fluvio Jolt project, providing three core transformation operations: `shift` (move/copy data), `default` (apply defaults), and `remove` (delete data).
@@ -183,8 +187,6 @@ cargo test --test java::shift
 
 ### Important Details
 - **Crate types**: `['cdylib', 'rlib']` - supports both C FFI and Rust library usage
-- **Feature flags**:
-  - `fuzzing`: Enables libfuzzer-sys dependency and fuzz module for fuzzing support
 - **Dependencies**:
   - `serde_json` with `preserve_order` feature (maintains key order)
   - `thiserror` for error types
