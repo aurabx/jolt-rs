@@ -347,11 +347,11 @@ The `@(level,path)` syntax means "go up `level` levels in the tree, then access 
 
 #### Function Syntax
 Functions are specified using the `=functionName(args...)` syntax:
-- **Literals**: Single-quoted strings like `' '` or `'_'`
+- **Literals**: Single-quoted strings (required) like `' '`, `'_'`, or `'-'`. Double quotes are not supported.
 - **Path expressions**: `@(level,path)` to reference values
 - **Context references**: `^value` to reference context values
 - **Identifiers**: Unquoted values that will be looked up
-- **Nested functions**: Functions can be nested, e.g., `=concat(=substring(@(0),0,4),"-",=substring(@(0),4,6))`
+- **Nested functions**: Functions can be nested, e.g., `=concat(=substring(@(0),0,4),'-',=substring(@(0),4,6))`
 
 #### Nested Functions
 Functions can be nested, allowing you to compose complex transformations. Inner functions are evaluated first, and their results become arguments to outer functions.
