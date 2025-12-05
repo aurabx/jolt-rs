@@ -13,6 +13,7 @@ pub fn evaluate_arg(
 ) -> Result<Value> {
     match arg {
         FunctionArg::Literal(s) => Ok(Value::String(s.clone())),
+        FunctionArg::Number(n) => Ok(Value::Number((*n).into())),
         FunctionArg::PathExpr(path_expr) => {
             evaluate_path_expr(path_expr, current, root, path_stack)
         }

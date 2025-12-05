@@ -12,6 +12,8 @@ pub struct FunctionCall {
 pub enum FunctionArg {
     /// String literal in single quotes like 'hello'
     Literal(String),
+    /// Numeric literal like 0 or 42
+    Number(i64),
     /// Path expression like @(1,name[0])
     PathExpr(PathExpr),
     /// Context reference like ^value
@@ -167,7 +169,7 @@ fn parse_single_arg(input: &str) -> Result<FunctionArg> {
 
     // Try to parse as a number
     if let Ok(num) = input.parse::<i64>() {
-        return Ok(FunctionArg::Literal(num.to_string()));
+        return Ok(FunctionArg::Number(num));
     }
 
     // Otherwise treat as identifier
@@ -306,6 +308,23 @@ mod tests {
                 assert_eq!(nested.args.len(), 3);
             }
             _ => panic!("Expected Function variant for third arg"),
+        }
+    }
+
+    #[test]
+    fn test_parse_substring_with_numbers() {
+        let call = FunctionCall::parse("=substring(@(0),0,4)").unwrap();
+        assert_eq!(call.name, "substring");
+        assert_eq!(call.args.len(), 3);
+
+        match &call.args[1] {
+            FunctionArg::Number(n) => assert_eq!(*n, 0),
+            _ => panic!("Expected Number variant for start index"),
+        }
+
+        match &call.args[2] {
+            FunctionArg::Number(n) => assert_eq!(*n, 4),
+            _ => panic!("Expected Number variant for end index"),
         }
     }
 }
