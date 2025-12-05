@@ -327,4 +327,40 @@ mod test {
             })
         );
     }
+
+    #[test]
+    fn test_invalid_array_index_error_includes_raw_value() {
+        // Using wildcard LHS, the captured key (e.g. "not_numeric") is used as an array index in RHS via &(0,0)
+        // This should fail and the error should include the raw invalid value.
+        let spec: TransformSpec = serde_json::from_value(json!(
+            [
+                {
+                  "operation": "shift",
+                  "spec": {
+                    "*": "out[&(0,0)]"
+                  }
+                }
+            ]
+        ))
+        .expect("parsed spec");
+
+        let source = json!({
+            "not_numeric": 1
+        });
+
+        let result = transform(source, &spec);
+        assert!(result.is_err(), "Expected error when using non-numeric key as array index");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not_numeric"),
+            "Error should include the invalid index value, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("Invalid index in expression"),
+            "Error should mention 'Invalid index in expression', got: {}",
+            err_msg
+        );
+    }
 }

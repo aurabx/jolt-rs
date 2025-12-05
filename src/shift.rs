@@ -186,7 +186,8 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
                     let idx = match idx_op {
                         IndexOp::Amp(idx0, idx1) => {
                             let m = get_match((*idx0, *idx1), path)?;
-                            m.parse().map_err(Error::InvalidIndex)?
+                            let raw = m.to_string();
+                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
                         }
                         IndexOp::Literal(idx) => *idx,
                         IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
@@ -196,7 +197,10 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
                                 .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
                                 .try_into()
                                 .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                            Value::String(s) => s.parse().map_err(Error::InvalidIndex)?,
+                            Value::String(s) => {
+                                let raw = s.clone();
+                                raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
+                            }
                             v => return Err(Error::InvalidIndexVal(v)),
                         },
                         IndexOp::Empty => {
@@ -295,7 +299,8 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 let idx = match idx_op {
                     IndexOp::Amp(idx0, idx1) => {
                         let m = get_match((*idx0, *idx1), path)?;
-                        m.parse().map_err(Error::InvalidIndex)?
+                        let raw = m.to_string();
+                        raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
                     }
                     IndexOp::Literal(idx) => *idx,
                     IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
@@ -305,7 +310,10 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                             .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
                             .try_into()
                             .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                        Value::String(s) => s.parse().map_err(Error::InvalidIndex)?,
+                        Value::String(s) => {
+                            let raw = s.clone();
+                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
+                        }
                         v => return Err(Error::InvalidIndexVal(v)),
                     },
                     IndexOp::Empty => {

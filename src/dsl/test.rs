@@ -567,3 +567,23 @@ fn test_parse_rhs_idx_at() {
     }
     .run();
 }
+
+#[test]
+fn test_parse_rhs_invalid_index_literal() {
+    // invalid numeric literal inside brackets should include the raw string in the error
+    let result = Rhs::parse("data[not_a_number]");
+    assert!(result.is_err(), "Expected parse error for non-numeric index");
+
+    let err = result.unwrap_err();
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("not_a_number"),
+        "Error message should include the invalid index string 'not_a_number', but got: {}",
+        err_msg
+    );
+    assert!(
+        err_msg.contains("Invalid index literal"),
+        "Error message should mention 'Invalid index literal', but got: {}",
+        err_msg
+    );
+}

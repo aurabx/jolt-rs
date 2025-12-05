@@ -399,9 +399,10 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_index(key: &str, pos: usize) -> Result<usize> {
-        key.parse().map_err(|e| ParseError {
+        let raw = key.to_string();
+        raw.parse().map_err(|e| ParseError {
             pos,
-            cause: Box::new(ParseErrorCause::InvalidIndex(e)),
+            cause: Box::new(ParseErrorCause::InvalidIndex { raw, source: e }),
         })
     }
 

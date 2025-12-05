@@ -15,8 +15,12 @@ pub enum Error {
     UnexpectedObjectInRhs,
     #[error("Not implemented yet.")]
     Todo,
-    #[error("Invalid index in expression.\n{0}")]
-    InvalidIndex(ParseIntError),
+    #[error("Invalid index in expression: {raw}\n{source}")]
+    InvalidIndex {
+        raw: String,
+        #[source]
+        source: ParseIntError,
+    },
     #[error("Array index out of range. Index={idx};Length={len};")]
     ArrIndexOutOfRange { idx: usize, len: usize },
     #[error("Json value can't be used as an index: {0:?}")]

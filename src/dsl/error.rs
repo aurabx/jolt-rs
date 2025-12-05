@@ -18,8 +18,12 @@ pub enum ParseErrorCause {
     UnexpectedChar(char),
     #[error("Unexpected token: {0:?}")]
     UnexpectedToken(Token),
-    #[error("Invalid index literal: {0}")]
-    InvalidIndex(ParseIntError),
+    #[error("Invalid index literal: {raw}\n{source}")]
+    InvalidIndex {
+        raw: String,
+        #[source]
+        source: ParseIntError,
+    },
     #[error("Maximum recursion depth ({0}) reached.")]
     MaximumRecursion(usize),
     #[error("put_back buffer is already full. THIS SHOULD NEVER HAPPEN.")]
