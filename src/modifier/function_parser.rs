@@ -18,6 +18,8 @@ pub enum FunctionArg {
     ContextRef(String),
     /// Simple identifier like bazinga
     Identifier(String),
+    /// Nested function call like =substring(@(0),0,4)
+    Function(Box<FunctionCall>),
 }
 
 /// Represents a path expression like @(1,name[0])
@@ -140,6 +142,12 @@ fn parse_function_args(input: &str) -> Result<Vec<FunctionArg>> {
 fn parse_single_arg(input: &str) -> Result<FunctionArg> {
     let input = input.trim();
 
+    // Nested function call: =functionName(...)
+    if input.starts_with('=') {
+        let nested_call = FunctionCall::parse(input)?;
+        return Ok(FunctionArg::Function(Box::new(nested_call)));
+    }
+
     // String literal in single quotes
     if input.starts_with('\'') && input.ends_with('\'') {
         let literal = &input[1..input.len() - 1];
@@ -260,5 +268,44 @@ mod tests {
         let call = FunctionCall::parse("=trim").unwrap();
         assert_eq!(call.name, "trim");
         assert_eq!(call.args.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_nested_function() {
+        let call = FunctionCall::parse("=toUpper(=toLower(@(0)))").unwrap();
+        assert_eq!(call.name, "toUpper");
+        assert_eq!(call.args.len(), 1);
+
+        match &call.args[0] {
+            FunctionArg::Function(nested) => {
+                assert_eq!(nested.name, "toLower");
+                assert_eq!(nested.args.len(), 1);
+            }
+            _ => panic!("Expected Function variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_concat_with_nested_substring() {
+        let call =
+            FunctionCall::parse("=concat(=substring(@(0),0,4),\"\\-\",=substring(@(0),4,6))").unwrap();
+        assert_eq!(call.name, "concat");
+        assert_eq!(call.args.len(), 3);
+
+        match &call.args[0] {
+            FunctionArg::Function(nested) => {
+                assert_eq!(nested.name, "substring");
+                assert_eq!(nested.args.len(), 3);
+            }
+            _ => panic!("Expected Function variant for first arg"),
+        }
+
+        match &call.args[2] {
+            FunctionArg::Function(nested) => {
+                assert_eq!(nested.name, "substring");
+                assert_eq!(nested.args.len(), 3);
+            }
+            _ => panic!("Expected Function variant for third arg"),
+        }
     }
 }

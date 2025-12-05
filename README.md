@@ -351,6 +351,21 @@ Functions are specified using the `=functionName(args...)` syntax:
 - **Path expressions**: `@(level,path)` to reference values
 - **Context references**: `^value` to reference context values
 - **Identifiers**: Unquoted values that will be looked up
+- **Nested functions**: Functions can be nested, e.g., `=concat(=substring(@(0),0,4),"-",=substring(@(0),4,6))`
+
+#### Nested Functions
+Functions can be nested, allowing you to compose complex transformations. Inner functions are evaluated first, and their results become arguments to outer functions.
+
+Example: Format a date string by extracting and joining parts:
+<pre>
+=concat(=substring(@(0),0,4),"-",=substring(@(0),4,6),"-",=substring(@(0),6,8))
+</pre>
+
+This takes a string like `"20250605"` and produces `"2025-06-05"` by:
+1. Extracting characters 0-4 ("2025")
+2. Extracting characters 4-6 ("06")
+3. Extracting characters 6-8 ("05")
+4. Concatenating them with "-" as separator
 
 #### Modifier Variants
 - **`modify-overwrite-beta`**: Always writes the result, overwriting existing values

@@ -1,6 +1,7 @@
 use crate::{Error, Result};
 use serde_json::Value;
-use super::function_parser::{FunctionArg, PathExpr};
+use super::function_parser::{FunctionArg, PathExpr, FunctionCall};
+use super::functions::execute_function;
 
 /// Evaluate a function argument against the current data and context
 pub fn evaluate_arg(
@@ -34,7 +35,30 @@ pub fn evaluate_arg(
                 .cloned()
                 .unwrap_or(Value::String(ident.clone())))
         }
+        FunctionArg::Function(nested_call) => {
+            // Recursively evaluate nested function call
+            evaluate_function_call(nested_call, current, root, context, path_stack)
+        }
     }
+}
+
+/// Evaluate a nested function call recursively
+fn evaluate_function_call(
+    call: &FunctionCall,
+    current: &Value,
+    root: &Value,
+    context: Option<&Value>,
+    path_stack: &[String],
+) -> Result<Value> {
+    // Evaluate all arguments first
+    let mut evaluated_args = Vec::new();
+    for arg in &call.args {
+        let evaluated = evaluate_arg(arg, current, root, context, path_stack)?;
+        evaluated_args.push(evaluated);
+    }
+
+    // Execute the nested function with evaluated arguments
+    execute_function(&call.name, &evaluated_args)
 }
 
 /// Evaluate a path expression like @(1,name[0])

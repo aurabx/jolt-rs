@@ -227,4 +227,20 @@ mod tests {
 
         assert_eq!(result["lower"]["leading"], json!("the quick brown fox"));
     }
+
+    #[test]
+    fn test_nested_function_call() {
+        let input = json!({
+            "text": "hello world"
+        });
+
+        let spec = json!({
+            "result": "=toUpper(=toLower(@(1,text)))"
+        });
+
+        let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
+        let result = modifier.apply(input).unwrap();
+
+        assert_eq!(result["result"], json!("HELLO WORLD"));
+    }
 }
