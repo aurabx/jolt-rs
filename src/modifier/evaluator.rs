@@ -63,6 +63,14 @@ fn evaluate_function_call(
 }
 
 /// Evaluate a path expression like @(1,name[0])
+/// 
+/// In JOLT modifier semantics, @(n,path) navigates the context stack:
+/// - @(1,path): reference from current object (the one being modified)
+/// - @(2,path): go up 1 level (parent), then navigate path  
+/// - @(n,path): go up n-1 levels from current, then navigate path
+///
+/// Note: @(0,...) is non-standard; we treat it as root for compatibility but
+/// it should generally not be used.
 fn evaluate_path_expr(
     path_expr: &PathExpr,
     current: &Value,
@@ -71,15 +79,20 @@ fn evaluate_path_expr(
 ) -> Result<Value> {
     // Get the base value by going up `level` levels
     let base = if path_expr.level == 0 {
+        // @(0,...) means reference from root
+        root
+    } else if path_expr.level == 1 {
+        // @(1,...) means reference from current object
         current
-    } else if path_expr.level > path_stack.len() {
-        // If level is greater than path depth, use root
+    } else if path_expr.level > path_stack.len() + 1 {
+        // If level is greater than path depth + 1, use root
         root
     } else {
         // Navigate to the appropriate level by going up from current position
         // path_stack represents where we are in the spec hierarchy
-        // We need to remove `level` entries from the end and navigate from root
-        let target_depth = path_stack.len() - path_expr.level;
+        // level=2 means go up 1 from current, level=3 means go up 2, etc.
+        let levels_up = path_expr.level - 1;
+        let target_depth = path_stack.len().saturating_sub(levels_up);
         let target_path = &path_stack[..target_depth];
 
         // Start from root and navigate to the target depth
