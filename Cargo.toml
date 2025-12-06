@@ -1,14 +1,11 @@
 [package]
 name = "harmony-jolt"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Aurabox <hello@aurabox.cloud>"]
 description = "JSON to JSON transformation library using the JOLT spec"
 repository = "https://github.com/aurabx/harmony-jolt"
 license = "Apache-2.0"
-
-#[package.metadata.docs.rs]
-#all-features = true
 
 [lib]
 crate-type = ['cdylib', 'rlib']
@@ -16,11 +13,10 @@ crate-type = ['cdylib', 'rlib']
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = {version = "1", features = ["preserve_order"]}
-thiserror = "1"
-libfuzzer-sys = { version = "0.4", optional = true }
+thiserror = "2"
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.8"
 
 [[bench]]
 name = "benchmarks"
