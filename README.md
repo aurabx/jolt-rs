@@ -343,25 +343,33 @@ This produces:
 }
 </pre>
 
-The `@(level,path)` syntax means "go up `level` levels in the tree, then access `path`". In this case, `@(1,name[0])` goes up 1 level from the current position to access the root, then gets `name[0]`.
+The `@(n,path)` syntax navigates the context stack:
+- `@(1,path)` - reference from current object (the one being modified)
+- `@(2,path)` - go up 1 level (parent), then navigate path
+- `@(n,path)` - go up n-1 levels from current, then navigate path
+
+In the example above, `@(1,name[0])` references `name[0]` from the current object (root level).
 
 #### Function Syntax
 Functions are specified using the `=functionName(args...)` syntax:
 - **Literals**: Single-quoted strings (required) like `' '`, `'_'`, or `'-'`. Double quotes are not supported.
-- **Path expressions**: `@(level,path)` to reference values
+- **Numbers**: Unquoted numeric literals like `0`, `4`, `42`, or `100`. These are passed as actual numbers to functions.
+- **Path expressions**: `@(n,path)` to reference values (see above)
 - **Context references**: `^value` to reference context values
 - **Identifiers**: Unquoted values that will be looked up
-- **Nested functions**: Functions can be nested, e.g., `=concat(=substring(@(0),0,4),'-',=substring(@(0),4,6))`
+- **Nested functions**: Functions can be nested (see example below)
 
 #### Nested Functions
 Functions can be nested, allowing you to compose complex transformations. Inner functions are evaluated first, and their results become arguments to outer functions.
 
-Example: Format a date string by extracting and joining parts:
+Example: Format a date string by extracting and joining parts. Given input `{"date": "20250605"}` at root level:
 <pre>
-=concat(=substring(@(0),0,4),"-",=substring(@(0),4,6),"-",=substring(@(0),6,8))
+{
+    "formatted": "=concat(=substring(@(1,date),0,4),'-',=substring(@(1,date),4,6),'-',=substring(@(1,date),6,8))"
+}
 </pre>
 
-This takes a string like `"20250605"` and produces `"2025-06-05"` by:
+This produces `{"date": "20250605", "formatted": "2025-06-05"}` by:
 1. Extracting characters 0-4 ("2025")
 2. Extracting characters 4-6 ("06")
 3. Extracting characters 6-8 ("05")

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Wildcard support in modifier**: The `*` wildcard can now be used in `modify-overwrite-beta` specs to iterate over all keys/indices in an object or array
+- **Nested function calls**: Functions can now be nested, allowing composition of complex transformations. Example: `=concat(=substring(@(1,date),0,4),'-',=substring(@(1,date),4,6),'-',=substring(@(1,date),6,8))`
+- **Numeric argument support**: Unquoted numeric literals (e.g., `0`, `4`, `42`) are now properly parsed and passed as actual numbers to functions, fixing substring operations that require numeric indices
+- **FunctionArg::Number variant**: New variant for representing numeric arguments in the AST
+- **FunctionArg::Function variant**: New variant for representing nested function calls in the AST
+
+### Changed
+- Function arguments are now properly typed: strings, numbers, paths, and nested functions are each represented distinctly
+- Numeric arguments are preserved as numbers through the evaluation pipeline instead of being converted to strings
+- Enhanced function parser to support recursive parsing of nested function calls
+
+### Fixed
+- `substring` function now works correctly with numeric index arguments
+- Function argument evaluation now supports arbitrary nesting depth
+
 ## [0.5.0] - 2025-01-27
 
 ### Added
