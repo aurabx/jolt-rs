@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2025-12-06
 
 ### Added
 - **Wildcard support in modifier**: The `*` wildcard can now be used in `modify-overwrite-beta` specs to iterate over all keys/indices in an object or array
@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `substring` function now works correctly with numeric index arguments
 - Function argument evaluation now supports arbitrary nesting depth
 
-## [0.5.0] - 2025-01-27
+### Dependencies
+- Updated thiserror to v2
+- Updated criterion to v0.8
+
+## [0.5.0] - 2025-10-27
 
 ### Added
 - **Modifier operations**: New `modify-overwrite-beta` operation for data transformation using functions
@@ -63,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Proper tree level navigation for nested specs
 - Support for array and object path navigation (`name[0]`, `lower.leading`)
 
-## [0.4.0] - 2025-01-27
+## [0.4.0] - 2025-10-27
 
 ### Note
 This is the initial release of harmony-jolt, forked from fluvio-jolt 0.3.1 (archived March 2, 2025).
