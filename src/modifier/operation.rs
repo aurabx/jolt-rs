@@ -64,6 +64,45 @@ impl ModifierSpec {
                     .collect();
 
                 for (key, value) in spec_entries {
+                    // Handle wildcard "*" to iterate over all children
+                    if key == "*" {
+                        if let Value::Object(nested_spec) = &value {
+                            // Get keys to iterate over (from target, not spec)
+                            let target_keys: Vec<String> = if let Some(obj) = target.as_object() {
+                                obj.keys().cloned().collect()
+                            } else if let Some(arr) = target.as_array() {
+                                (0..arr.len()).map(|i| i.to_string()).collect()
+                            } else {
+                                vec![]
+                            };
+
+                            // Apply nested spec to each child
+                            for child_key in target_keys {
+                                let mut new_path = path.to_vec();
+                                new_path.push(child_key.clone());
+
+                                // Get the child value
+                                let child_target = if target.is_array() {
+                                    let idx: usize = child_key.parse().unwrap_or(0);
+                                    target.as_array_mut().unwrap().get_mut(idx)
+                                } else {
+                                    target.as_object_mut().unwrap().get_mut(&child_key)
+                                };
+
+                                if let Some(child) = child_target {
+                                    self.apply_spec_to_value(
+                                        child,
+                                        root,
+                                        &Value::Object(nested_spec.clone()),
+                                        context,
+                                        &new_path,
+                                    )?;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
                     match &value {
                         Value::String(s) if s.starts_with('=') => {
                             // This is a function call
@@ -242,5 +281,95 @@ mod tests {
         let result = modifier.apply(input).unwrap();
 
         assert_eq!(result["result"], json!("HELLO WORLD"));
+    }
+
+    #[test]
+    fn test_substring_with_numeric_args() {
+        let input = json!({
+            "date": "20250605"
+        });
+
+        let spec = json!({
+            "year": "=substring(@(1,date),0,4)",
+            "month": "=substring(@(1,date),4,6)",
+            "day": "=substring(@(1,date),6,8)"
+        });
+
+        let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
+        let result = modifier.apply(input).unwrap();
+
+        assert_eq!(result["year"], json!("2025"));
+        assert_eq!(result["month"], json!("06"));
+        assert_eq!(result["day"], json!("05"));
+    }
+
+    #[test]
+    fn test_nested_concat_substring() {
+        let input = json!({
+            "date": "20250605"
+        });
+
+        let spec = json!({
+            "formatted": "=concat(=substring(@(1,date),0,4),'-',=substring(@(1,date),4,6),'-',=substring(@(1,date),6,8))"
+        });
+
+        let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
+        let result = modifier.apply(input).unwrap();
+
+        assert_eq!(result["formatted"], json!("2025-06-05"));
+    }
+
+    #[test]
+    fn test_wildcard_object_iteration() {
+        let input = json!({
+            "entries": {
+                "0": { "date": "20250101" },
+                "1": { "date": "20251231" }
+            }
+        });
+
+        let spec = json!({
+            "entries": {
+                "*": {
+                    "formatted": "=concat(=substring(@(1,date),0,4),'-',=substring(@(1,date),4,6),'-',=substring(@(1,date),6,8))"
+                }
+            }
+        });
+
+        let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
+        let result = modifier.apply(input).unwrap();
+
+        assert_eq!(result["entries"]["0"]["formatted"], json!("2025-01-01"));
+        assert_eq!(result["entries"]["1"]["formatted"], json!("2025-12-31"));
+    }
+
+    #[test]
+    fn test_wildcard_nested_object() {
+        let input = json!({
+            "temp": {
+                "entry": {
+                    "0": { "resource": { "started": "20000101" } },
+                    "1": { "resource": { "started": "20241225" } }
+                }
+            }
+        });
+
+        let spec = json!({
+            "temp": {
+                "entry": {
+                    "*": {
+                        "resource": {
+                            "started": "=concat(=substring(@(1,started),0,4),'-',=substring(@(1,started),4,6),'-',=substring(@(1,started),6,8))"
+                        }
+                    }
+                }
+            }
+        });
+
+        let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
+        let result = modifier.apply(input).unwrap();
+
+        assert_eq!(result["temp"]["entry"]["0"]["resource"]["started"], json!("2000-01-01"));
+        assert_eq!(result["temp"]["entry"]["1"]["resource"]["started"], json!("2024-12-25"));
     }
 }
