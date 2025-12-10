@@ -620,3 +620,16 @@ fn test_parse_rhs_shorthand_amp_in_brackets() {
     }
     .run();
 }
+
+#[test]
+fn test_parse_rhs_tasks_amp2() {
+    RhsTestCase {
+        expr: "tasks[&2].taskId",
+        expected: Rhs(vec![
+            RhsPart::Key(RhsEntry::Key("tasks".into())),
+            RhsPart::Index(IndexOp::Amp(2, 0)),
+            RhsPart::Key(RhsEntry::Key("taskId".into())),
+        ]),
+    }
+    .run();
+}
