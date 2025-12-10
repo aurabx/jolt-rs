@@ -229,6 +229,14 @@ impl<'input> Parser<'input> {
             None => return Ok((0, 0)),
         };
 
+        // Support shorthand &N syntax (without parentheses) for Java JOLT compatibility
+        // e.g., &1 is equivalent to &(1) which is equivalent to &(1,0)
+        if let TokenKind::Key(key) = &token.kind {
+            if let Ok(idx) = key.parse::<usize>() {
+                return Ok((idx, 0));
+            }
+        }
+
         if token.kind != TokenKind::OpenPrnth {
             self.input.put_back(token)?;
             return Ok((0, 0));

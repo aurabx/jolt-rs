@@ -587,3 +587,36 @@ fn test_parse_rhs_invalid_index_literal() {
         err_msg
     );
 }
+
+#[test]
+fn test_parse_rhs_shorthand_amp_in_brackets() {
+    // Shorthand &N syntax (without parentheses) for Java JOLT compatibility
+    // &1 should be equivalent to &(1) which is equivalent to &(1,0)
+    RhsTestCase {
+        expr: "tasks[&1].id",
+        expected: Rhs(vec![
+            RhsPart::Key(RhsEntry::Key("tasks".into())),
+            RhsPart::Index(IndexOp::Amp(1, 0)),
+            RhsPart::Key(RhsEntry::Key("id".into())),
+        ]),
+    }
+    .run();
+    RhsTestCase {
+        expr: "[&1].guid",
+        expected: Rhs(vec![
+            RhsPart::Index(IndexOp::Amp(1, 0)),
+            RhsPart::Key(RhsEntry::Key("guid".into())),
+        ]),
+    }
+    .run();
+    RhsTestCase {
+        expr: "photos[&3].sizes.&1",
+        expected: Rhs(vec![
+            RhsPart::Key(RhsEntry::Key("photos".into())),
+            RhsPart::Index(IndexOp::Amp(3, 0)),
+            RhsPart::Key(RhsEntry::Key("sizes".into())),
+            RhsPart::Key(RhsEntry::Amp(1, 0)),
+        ]),
+    }
+    .run();
+}

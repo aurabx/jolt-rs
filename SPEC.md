@@ -37,6 +37,7 @@ Number: '1-9' '0-9'+;
 
 ## Syntactic sugar
 
+- `&x` is equal to `&(x, 0)` (e.g., `&1` equals `&(1,0)`).
 - `&(x)` is equal to `&(x, 0)`.
 - `$(x)` is equal to `$(x, 0)`.
 - `@(Rhs)` is equal to `@(0, Rhs)`,
