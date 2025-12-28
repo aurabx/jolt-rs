@@ -1,0 +1,46 @@
+[project]
+name = "harmony-jolt"
+description = "JSON to JSON transformation library using the JOLT spec (port of Java Jolt)"
+language = "rust"
+version = "0.7.0"
+repository = "https://github.com/aurabx/harmony-jolt"
+
+[commands]
+build = "cargo build --release"
+test = "cargo test"
+lint = "cargo clippy && cargo fmt --check"
+bench = "cargo bench"
+
+[entry_points]
+main = "src/lib.rs"
+shift = "src/shift.rs"
+modifier = "src/modifier/"
+dsl = "src/dsl/"
+
+[dependencies]
+internal = []
+external = ["serde", "serde_json", "thiserror"]
+
+[related_projects]
+upstream = []
+downstream = ["harmony-proxy"]
+
+[concepts.shift]
+files = ["src/shift.rs", "src/dsl/"]
+summary = "Copy data from input tree to output tree using path notation and wildcards (*, &, $, @)"
+
+[concepts.default]
+files = ["src/default.rs"]
+summary = "Apply default values when fields are missing in input JSON"
+
+[concepts.modifier]
+files = ["src/modifier/"]
+summary = "Transform values with functions: concat, toLower, toUpper, substring, trim, join"
+
+[concepts.remove]
+files = ["src/remove.rs"]
+summary = "Remove specified fields from JSON document"
+
+[concepts.transform_spec]
+files = ["src/spec.rs", "src/lib.rs"]
+summary = "TransformSpec struct defining ordered list of operations (shift, default, modify, remove)"
