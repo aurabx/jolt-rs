@@ -633,3 +633,50 @@ fn test_parse_rhs_tasks_amp2() {
     }
     .run();
 }
+
+#[test]
+fn test_parse_lhs_square_keeps_dots_and_special_chars() {
+    LhsTestCase {
+        expr: "#http://example.org/fhir|v1.0*",
+        expected: Lhs::Square("http://example.org/fhir|v1.0*".into()),
+    }
+    .run();
+}
+
+#[test]
+fn test_parse_lhs_square_honours_escapes() {
+    LhsTestCase {
+        expr: "#a\\.b",
+        expected: Lhs::Square("a.b".into()),
+    }
+    .run();
+}
+
+#[test]
+fn test_parse_lhs_square_empty() {
+    LhsTestCase {
+        expr: "#",
+        expected: Lhs::Square("".into()),
+    }
+    .run();
+}
+
+#[test]
+fn test_parse_rhs_hash_index() {
+    RhsTestCase {
+        expr: "out[#2].value",
+        expected: Rhs(vec![
+            RhsPart::Key(RhsEntry::Key("out".into())),
+            RhsPart::Index(IndexOp::Hash(2)),
+            RhsPart::Key(RhsEntry::Key("value".into())),
+        ]),
+    }
+    .run();
+}
+
+#[test]
+fn test_parse_rhs_hash_index_requires_number() {
+    assert!(Rhs::parse("out[#]").is_err());
+    assert!(Rhs::parse("out[#x]").is_err());
+    assert!(Rhs::parse("out[#-1]").is_err());
+}

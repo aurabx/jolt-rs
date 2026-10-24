@@ -10,6 +10,7 @@ pub fn execute_function(name: &str, args: &[Value]) -> Result<Value> {
         "substring" => substring(args),
         "trim" => trim(args),
         "join" => join(args),
+        "split" => split(args),
         _ => Err(Error::InvalidFunction(name.to_string())),
     }
 }
@@ -128,6 +129,43 @@ fn join(args: &[Value]) -> Result<Value> {
     Ok(Value::String(parts.join(&separator)))
 }
 
+/// Split a string into an array of strings on a separator.
+///
+/// Matches Java JOLT's `split(separator, string)` argument order. Java treats the separator as a
+/// regular expression; here it is a plain string. A null input yields null, as in Java.
+fn split(args: &[Value]) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(Error::FunctionArgumentError(format!(
+            "split expects 2 arguments (separator, string), got {}",
+            args.len()
+        )));
+    }
+
+    let separator = value_to_string(&args[0]);
+    if separator.is_empty() {
+        return Err(Error::FunctionArgumentError(
+            "split separator must not be empty".to_string(),
+        ));
+    }
+
+    let s = match &args[1] {
+        Value::Null => return Ok(Value::Null),
+        Value::String(s) => s,
+        other => {
+            return Err(Error::FunctionArgumentError(format!(
+                "split expects a string to split, got {}",
+                other
+            )))
+        }
+    };
+
+    Ok(Value::Array(
+        s.split(separator.as_str())
+            .map(|part| Value::String(part.to_string()))
+            .collect(),
+    ))
+}
+
 /// Convert a JSON value to a string representation
 fn value_to_string(value: &Value) -> String {
     match value {
@@ -188,5 +226,39 @@ mod tests {
         let args = vec![json!("_"), json!("a"), json!("b"), json!("c")];
         let result = join(&args).unwrap();
         assert_eq!(result, json!("a_b_c"));
+    }
+
+    #[test]
+    fn test_split() {
+        let args = vec![json!(","), json!("a,b,,c")];
+        let result = split(&args).unwrap();
+        assert_eq!(result, json!(["a", "b", "", "c"]));
+    }
+
+    #[test]
+    fn test_split_multi_char_separator_is_not_a_regex() {
+        let args = vec![json!(". "), json!("a. b.c")];
+        let result = split(&args).unwrap();
+        assert_eq!(result, json!(["a", "b.c"]));
+    }
+
+    #[test]
+    fn test_split_without_separator_match() {
+        let args = vec![json!("|"), json!("abc")];
+        let result = split(&args).unwrap();
+        assert_eq!(result, json!(["abc"]));
+    }
+
+    #[test]
+    fn test_split_null_input_is_null() {
+        let args = vec![json!(","), Value::Null];
+        assert_eq!(split(&args).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn test_split_rejects_bad_arguments() {
+        assert!(split(&[json!(",")]).is_err());
+        assert!(split(&[json!(""), json!("abc")]).is_err());
+        assert!(split(&[json!(","), json!(12)]).is_err());
     }
 }

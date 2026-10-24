@@ -1,0 +1,29 @@
+{
+  "input": {
+    "ratings": {
+      "primary": { "value": 3, "max": 5 },
+      "other": { "value": 1, "max": 2 },
+      "quality": { "value": 4, "max": 5 }
+    }
+  },
+  "spec": [
+    {
+      "operation": "shift",
+      "spec": {
+        "ratings": {
+          "primary|quality": {
+            "$": "out[#2].name",
+            "value": "out[#2].value",
+            "max": "out[#2].max"
+          }
+        }
+      }
+    }
+  ],
+  "expected": {
+    "out": [
+      { "name": "primary", "value": 3, "max": 5 },
+      { "name": "quality", "value": 4, "max": 5 }
+    ]
+  }
+}

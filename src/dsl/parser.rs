@@ -157,6 +157,18 @@ impl<'input> Parser<'input> {
                 IndexOp::Empty
             }
             TokenKind::Key(key) => IndexOp::Literal(Self::parse_index(&key, token.pos)?),
+            TokenKind::Square => {
+                let token = self.get_next()?;
+                match token.kind {
+                    TokenKind::Key(key) => IndexOp::Hash(Self::parse_index(&key, token.pos)?),
+                    _ => {
+                        return Err(ParseError {
+                            pos: token.pos,
+                            cause: ParseErrorCause::ExpectedIdx.into(),
+                        });
+                    }
+                }
+            }
             TokenKind::At => {
                 let t = self.parse_at_tuple(depth)?;
                 IndexOp::At(t.0, t.1)
@@ -173,18 +185,7 @@ impl<'input> Parser<'input> {
     }
 
     fn parse_square_lhs(&mut self) -> Result<String> {
-        let token = match self.input.next()? {
-            Some(token) => token,
-            None => return Ok(String::new()),
-        };
-
-        match token.kind {
-            TokenKind::Key(key) => Ok(key),
-            _ => Err(ParseError {
-                pos: token.pos,
-                cause: Box::new(ParseErrorCause::UnexpectedToken(token)),
-            }),
-        }
+        self.input.rest_as_literal()
     }
 
     fn parse_at_tuple(&mut self, depth: usize) -> Result<(usize, Box<Rhs>)> {

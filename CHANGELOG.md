@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - Unreleased
+
+### Added
+- **`[#n]` array index** on the RHS of `shift`, matching Java JOLT. It uses the match count of the spec level `n` steps up as the index, which turns a map into a dense array.
+- **`split` function** for `modify-*-beta`: `=split(',', @(1,tags))`. The separator is a plain string, not a regular expression as in Java JOLT.
+- **Wildcards in `remove`**: `*` matches any run of characters in a spec key. Keys also match array indexes, so `remove` can now delete array elements and walk into them.
+
+### Changed
+- **Breaking:** `default` now replaces `null` input values, matching Java JOLT's Defaultr. Before, a `null` was kept.
+- **Breaking:** `dsl::IndexOp` has a new `Hash` variant. Exhaustive matches on it must handle it.
+- A `#` literal on the LHS now runs to the end of the key, so it can hold dots, as in `#http://example.org`. The `\.` escape still works.
+- `default` with an empty object in the spec now writes an empty object for an absent key, as in Java JOLT.
+
+### Fixed
+- `default` turned array literals into objects with index keys. `["x"]` became `{"0":"x"}`. Arrays are now written as is.
+- `default` and `remove` mishandled spec keys containing `/` or `~`.
+
 ## [0.7.0] - 2025-12-10
 
 ### Added

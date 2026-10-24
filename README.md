@@ -89,7 +89,7 @@ assert_eq!(output, json!({
 ## Supported Operations
 1. `shift`: copy data from the input tree and put it the output tree
 2. `default`: apply default values to the tree
-3. `modify-overwrite-beta`: modify data using functions (concat, toLower, toUpper, substring, trim, join)
+3. `modify-overwrite-beta`: modify data using functions (concat, toLower, toUpper, substring, trim, join, split)
 4. `remove`: remove data from the tree
 
 See `SPEC.md` for more info on specifics of execution order and DSL grammar.
@@ -258,6 +258,26 @@ See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jol
 
 See tests in `tests/java/resources/shift` for usage examples.
 
+#### `#` Wildcard
+
+On the left hand side, `#` writes a literal string. Everything after the `#` is the literal, so it
+can hold dots, for example `"#http://hl7.org/fhir/sid/us-ssn": "identifier.system"`.
+
+On the right hand side, `[#n]` uses a match count as an array index. It counts how many matches
+the spec level `n` steps up has made so far, where the current leaf is level 0. This turns a map
+into a dense array:
+<pre>
+{
+    "ratings": {
+        "primary|quality": {
+            "$": "out[#2].name",
+            "value": "out[#2].value"
+        }
+    }
+}
+</pre>
+writes `primary` to `out[0]` and `quality` to `out[1]`, whatever other keys `ratings` holds.
+
 See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java).
 
 ### `Default` operation
@@ -293,6 +313,10 @@ the output JSON will be:
 </pre>
 As you can see, the field `mobile` remains not affected while the `code` has a default '+1' value.
 
+A default is also written where the input value is `null`, as in Java JOLT. Array values in the
+spec are literals: `{"meta": {"profile": ["http://example.org/x"]}}` writes the array as is.
+An existing array in the input is never merged with the default.
+
 ### `Modifier` operations
 The `modify-overwrite-beta` operation allows you to modify values using functions. This is useful for string manipulation, data transformation, and combining values.
 
@@ -303,6 +327,9 @@ The `modify-overwrite-beta` operation allows you to modify values using function
 - **`substring`**: Extract a substring (start, end)
 - **`trim`**: Remove leading/trailing whitespace
 - **`join`**: Join array elements with a separator
+- **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression.
+
+There is no date or time function, and `${...}` substitution is not supported. A string such as `${now}` is copied as is. Pass values like the current time in through the input instead.
 
 #### Example: Concatenating Names
 For example, given this input JSON:
@@ -409,6 +436,20 @@ the output JSON will be:
     }
 }
 </pre>
+
+Spec keys can use `*` to match any run of characters. `"*"` matches every key, and `"tmp_*"`
+matches every key that starts with `tmp_`. On arrays, keys match element indexes, so `"0"` removes
+the first element and `"*"` walks every element:
+<pre>
+{
+    "patients": {
+        "*": {
+            "ssn": ""
+        }
+    }
+}
+</pre>
+removes `ssn` from every element of the `patients` array.
 
 ## Contributing
 

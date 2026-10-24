@@ -1,0 +1,26 @@
+{
+  "input": {
+    "PatientID": "12345"
+  },
+  "spec": [
+    {
+      "operation": "shift",
+      "spec": {
+        "PatientID": {
+          "#http://example.org/patient-id": "identifier.system",
+          "#urn:oid:1.2.36.1": "identifier.assigner",
+          "#escaped\\.dot": "identifier.legacy",
+          "@": "identifier.value"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "identifier": {
+      "system": "http://example.org/patient-id",
+      "assigner": "urn:oid:1.2.36.1",
+      "legacy": "escaped.dot",
+      "value": "12345"
+    }
+  }
+}
