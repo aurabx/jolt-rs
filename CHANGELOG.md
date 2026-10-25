@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Breaking:** `default` now replaces `null` input values, matching Java JOLT's Defaultr. Before, a `null` was kept.
 - **Breaking:** `dsl::IndexOp` has a new `Hash` variant. Exhaustive matches on it must handle it.
-- **Breaking:** `Error` has a new `ArrayPaddingLimit` variant. Exhaustive matches on it must handle it.
+- **Breaking:** `Error` has new `ArrayPaddingLimit` and `IndexTooLong` variants. Exhaustive matches on it must handle them.
 - **Breaking:** `remove` treats `*` in a spec key as a wildcard. `"a*"` used to remove only a key named `a*`; it now removes every key starting with `a`. Write `a\*` for the literal key. Keys also match array indexes, so `remove` can delete array elements and walk into them. An index key is read as a number, so `"01"` selects index 1, as in Java JOLT.
 - **Breaking:** `default` on a `null` root now returns an object holding the defaults, as in Java JOLT. It used to return `null`.
 - A `#` literal on the LHS now runs to the end of the key, so it can hold dots, as in `#http://example.org`. The `\.` escape still works.
@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `default` turned array literals into objects with index keys. `["x"]` became `{"0":"x"}`. Arrays are now written as is.
 - `default` and `remove` mishandled spec keys containing `/` or `~`.
-- `shift` index expressions that take their index from the input, such as `[&0]` and `[@(1,idx)]`, could exhaust memory. A key like `"10000000000"` padded the output array with nulls up to that index. Each `shift` run may now pad at most 100,000 null slots in total, across all arrays. Going over is an `ArrayPaddingLimit` error. In-order writes, where the index equals the array length, cost nothing.
+- `shift` index expressions that take their index from the input, such as `[&0]` and `[@(1,idx)]`, could exhaust memory. A key like `"10000000000"` padded the output array with nulls up to that index. Each `shift` run may now pad at most 100,000 null slots in total, across all arrays. Going over is an `ArrayPaddingLimit` error. In-order writes, where the index equals the array length, cost nothing. A gap is charged when it is created, even if later writes fill it, so a large array written out of order can hit the limit.
+- An array index taken from a string, such as a key for `[&0]` or a value for `[@(1,idx)]`, was parsed at any length. A long string of leading zeros could cost seconds of CPU, paid again for every child under an ancestor index such as `[&1]`. Index strings longer than 20 characters are now an `IndexTooLong` error.
 
 ## [0.7.0] - 2025-12-10
 

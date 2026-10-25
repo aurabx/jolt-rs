@@ -285,6 +285,12 @@ An array index on the right hand side, such as `[&0]`, `[@(1,idx)]`, `[#n]` or `
 past the end of the array. The gap is filled with nulls. Each `shift` run may fill at most 100,000
 null slots in total, across all arrays. Going over fails with `Error::ArrayPaddingLimit`. Writing to
 the next free index costs nothing, so reshaping a large input array in order is not limited.
+A gap is charged when it is created, even if later writes fill it. So a large array written out of
+order can hit the limit.
+
+An index taken from a string, such as a key for `[&0]` or a string value for `[@(1,idx)]`, may be
+at most 20 characters long. That is the number of digits in the largest index. A longer string
+fails with `Error::IndexTooLong`, even if it is a valid number with leading zeros.
 
 See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java).
 

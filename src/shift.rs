@@ -33,6 +33,7 @@ impl PaddingBudget {
             return Err(Error::ArrayPaddingLimit {
                 idx,
                 len,
+                used: self.used,
                 max: MAX_ARRAY_PADDING,
             });
         }
@@ -225,6 +226,12 @@ fn apply_match<'ctx, 'input: 'ctx>(
 
 // Evaluate an @ expression into a json value using the given path
 fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
+    lookup_at(at, path).map(Value::clone)
+}
+
+// Find the value an @ expression points at, without copying it. Index expressions use this
+// so they can check a string's length before anything copies it.
+fn lookup_at<'v>(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &'v Value)]) -> Result<&'v Value> {
     if at.0 >= path.len() {
         return Err(Error::PathIndexOutOfRange {
             idx: at.0,
@@ -232,13 +239,17 @@ fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Va
         });
     }
 
-    let v = &path[path.len() - at.0 - 1];
+    let v = path[path.len() - at.0 - 1].1;
 
-    eval_rhs(at.1, v.1, path)
+    lookup_rhs(at.1, v, path)
 }
 
-// Evaluate a rhs expression into a json value using the given path
-fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
+// Find the value a rhs expression points at inside `v`, using the given path
+fn lookup_rhs<'v>(
+    rhs: &Rhs,
+    v: &'v Value,
+    path: &[(Vec<Cow<'_, str>>, &Value)],
+) -> Result<&'v Value> {
     let mut v = v;
 
     for part in rhs.0.iter() {
@@ -246,25 +257,9 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
             RhsPart::Index(idx_op) => match v {
                 Value::Array(a) => {
                     let idx = match idx_op {
-                        IndexOp::Amp(idx0, idx1) => {
-                            let m = get_match((*idx0, *idx1), path)?;
-                            let raw = m.to_string();
-                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                        }
+                        IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                         IndexOp::Literal(idx) => *idx,
-                        IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
-                            Value::Number(n) => n
-                                .clone()
-                                .as_u64()
-                                .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
-                                .try_into()
-                                .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                            Value::String(s) => {
-                                let raw = s.clone();
-                                raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                            }
-                            v => return Err(Error::InvalidIndexVal(v)),
-                        },
+                        IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
                         // `#` only counts output matches, so it has no meaning in a lookup
                         IndexOp::Hash(_) | IndexOp::Empty => {
                             return Err(Error::UnexpectedRhsEntry);
@@ -296,7 +291,40 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
         }
     }
 
-    Ok(Value::clone(v))
+    Ok(v)
+}
+
+// usize::MAX has 20 decimal digits. A longer index string can only be valid with leading zeros,
+// and parsing it costs time in proportion to its length. An ancestor index such as `[&1]` is
+// parsed again for every child, so a 1 MB key could cost many seconds of CPU.
+const MAX_INDEX_LEN: usize = 20;
+
+// Parse an array index taken from a match or an input value.
+// Rejects over-length strings before parsing, and leaves them out of the error.
+fn parse_index(raw: &str) -> Result<usize> {
+    if raw.len() > MAX_INDEX_LEN {
+        return Err(Error::IndexTooLong {
+            len: raw.len(),
+            max: MAX_INDEX_LEN,
+        });
+    }
+
+    raw.parse().map_err(|e| Error::InvalidIndex {
+        raw: raw.to_owned(),
+        source: e,
+    })
+}
+
+// Turn the value an `[@(...)]` expression points at into an array index.
+fn index_from_value(v: &Value) -> Result<usize> {
+    match v {
+        Value::Number(n) => n
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| Error::InvalidIndexVal(Value::Number(n.clone()))),
+        Value::String(s) => parse_index(s),
+        v => Err(Error::InvalidIndexVal(v.clone())),
+    }
 }
 
 // Evaluate a rhs expression into a string
@@ -362,25 +390,9 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 };
 
                 let idx = match idx_op {
-                    IndexOp::Amp(idx0, idx1) => {
-                        let m = get_match((*idx0, *idx1), path)?;
-                        let raw = m.to_string();
-                        raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                    }
+                    IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                     IndexOp::Literal(idx) => *idx,
-                    IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
-                        Value::Number(n) => n
-                            .clone()
-                            .as_u64()
-                            .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
-                            .try_into()
-                            .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                        Value::String(s) => {
-                            let raw = s.clone();
-                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                        }
-                        v => return Err(Error::InvalidIndexVal(v)),
-                    },
+                    IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
                     IndexOp::Hash(level) => get_match_count(*level, counts)?,
                     IndexOp::Empty => {
                         arr.push(Value::Null);
@@ -633,7 +645,7 @@ mod test {
         let over_limit = (MAX_ARRAY_PADDING + 1).to_string();
         let result = run(json!({ "*": "a[&0]" }), json!({ over_limit: "x" }));
         assert!(
-            matches!(result, Err(Error::ArrayPaddingLimit { idx, len: 0, max: MAX_ARRAY_PADDING }) if idx == MAX_ARRAY_PADDING + 1),
+            matches!(result, Err(Error::ArrayPaddingLimit { idx, len: 0, used: 0, max: MAX_ARRAY_PADDING }) if idx == MAX_ARRAY_PADDING + 1),
             "got {:?}",
             result
         );
@@ -704,5 +716,108 @@ mod test {
 
         assert!(shift.apply(&input).is_ok());
         assert!(shift.apply(&input).is_ok());
+    }
+
+    #[test]
+    fn test_padding_error_reports_budget_already_used() {
+        let result = run(
+            json!({ "*": { "*": "&1[&0]" } }),
+            json!({ "a": { "60000": 1 }, "b": { "60000": 1 } }),
+        );
+
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx: 60_000, len: 0, used: 60_000, .. })),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_literal_index_is_charged_against_the_budget() {
+        let result = run(json!({ "a": "out[200000]" }), json!({ "a": 1 }));
+
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { idx: 200_000, .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_nested_arrays_share_one_budget() {
+        let spec = json!({ "*": { "*": "a[&1][&0]" } });
+
+        // 50,000 + 49,999 gap slots fits; 50,000 + 50,001 does not.
+        let output = run(spec.clone(), json!({ "50000": { "49999": 1 } })).unwrap();
+        assert_eq!(output["a"][50_000][49_999], json!(1));
+
+        let result = run(spec, json!({ "50000": { "50001": 1 } }));
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    fn long_index(len: usize) -> String {
+        "0".repeat(len - 1) + "1"
+    }
+
+    #[test]
+    fn test_amp_index_string_over_max_len_is_an_error() {
+        let key = long_index(MAX_INDEX_LEN + 1);
+        let result = run(json!({ "*": "a[&0]" }), json!({ key: "x" }));
+
+        assert!(
+            matches!(result, Err(Error::IndexTooLong { len, max: MAX_INDEX_LEN }) if len == MAX_INDEX_LEN + 1),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_at_index_string_over_max_len_is_an_error() {
+        let result = run(
+            json!({ "v": "out[@(1,idx)]" }),
+            json!({ "v": "x", "idx": long_index(MAX_INDEX_LEN + 1) }),
+        );
+
+        assert!(matches!(result, Err(Error::IndexTooLong { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_index_string_at_max_len_still_parses() {
+        let idx = "00000000000000000005";
+        assert_eq!(idx.len(), MAX_INDEX_LEN);
+
+        let from_amp = run(json!({ "*": "a[&0]" }), json!({ idx: "x" })).unwrap();
+        assert_eq!(from_amp, json!({ "a": [null, null, null, null, null, "x"] }));
+
+        let from_at = run(json!({ "v": "out[@(1,idx)]" }), json!({ "v": "x", "idx": idx })).unwrap();
+        assert_eq!(from_at, json!({ "out": [null, null, null, null, null, "x"] }));
+    }
+
+    #[test]
+    fn test_lookup_index_string_over_max_len_is_an_error() {
+        let at_spec = json!({ "a": { "@(1,arr[@(1,i)])": "out" } });
+        let output = run(at_spec.clone(), json!({ "a": {}, "arr": [10, 20], "i": "1" })).unwrap();
+        assert_eq!(output, json!({ "out": 20 }));
+
+        let from_at = run(at_spec, json!({ "a": {}, "arr": [10, 20], "i": long_index(MAX_INDEX_LEN + 1) }));
+        assert!(matches!(from_at, Err(Error::IndexTooLong { .. })), "got {:?}", from_at);
+
+        let amp_spec = json!({ "k*": { "@(1,arr[&(0,1)])": "out" } });
+        let output = run(amp_spec.clone(), json!({ "k1": {}, "arr": [10, 20] })).unwrap();
+        assert_eq!(output, json!({ "out": 20 }));
+
+        let key = format!("k{}", long_index(MAX_INDEX_LEN + 1));
+        let from_amp = run(amp_spec, json!({ key: {}, "arr": [10, 20] }));
+        assert!(matches!(from_amp, Err(Error::IndexTooLong { .. })), "got {:?}", from_amp);
+    }
+
+    #[test]
+    fn test_long_ancestor_index_string_fails_fast() {
+        let children: serde_json::Map<String, Value> = (0..10_000).map(|i| (i.to_string(), json!(i))).collect();
+        let result = run(json!({ "*": { "*": "out[&1]" } }), json!({ long_index(100_000): children }));
+        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
+
+        let items: Vec<Value> = (0..10_000).map(|i| json!({ "v": i })).collect();
+        let result = run(
+            json!({ "items": { "*": { "v": "out[@(3,idx)]" } } }),
+            json!({ "items": items, "idx": long_index(100_000) }),
+        );
+        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
     }
 }
