@@ -9,6 +9,39 @@ use crate::{Error, Result};
 
 const ROOT_KEY: &str = "root";
 
+// Index expressions such as `[&0]` and `[@(1,idx)]` take their index from the input, and a write
+// to index `i` pads the array with nulls up to `i`. Without a bound, one key like "10000000000"
+// exhausts memory, and many moderate keys add up the same way. So each `shift` run gets a budget of
+// gap slots: writing index `i` into an array of length `len` costs `i - len` when `i > len`, and
+// nothing otherwise. A run may pad at most this many slots in total. Reaching the limit exactly is
+// allowed; one slot more is an error. In-order writes (index == length) are free at any size.
+const MAX_ARRAY_PADDING: usize = 100_000;
+
+// Tracks the null padding spent by one `shift` run. See `MAX_ARRAY_PADDING`.
+#[derive(Debug, Default)]
+struct PaddingBudget {
+    used: usize,
+}
+
+impl PaddingBudget {
+    // Reserve the gap slots needed to write `idx` into an array of length `len`.
+    // Fails without reserving anything when the run would go over the limit.
+    fn reserve(&mut self, idx: usize, len: usize) -> Result<()> {
+        let gap = idx.saturating_sub(len);
+        let used = self.used.saturating_add(gap);
+        if used > MAX_ARRAY_PADDING {
+            return Err(Error::ArrayPaddingLimit {
+                idx,
+                len,
+                used: self.used,
+                max: MAX_ARRAY_PADDING,
+            });
+        }
+        self.used = used;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Shift(Object);
 
@@ -17,8 +50,10 @@ impl Transform for Shift {
         let mut path = vec![(vec![Cow::Borrowed(ROOT_KEY)], val)];
         let mut counts = vec![0];
 
+        let mut budget = PaddingBudget::default();
+
         let mut out = Value::Null;
-        apply(&self.0, &mut path, &mut counts, &mut out)?;
+        apply(&self.0, &mut path, &mut counts, &mut budget, &mut out)?;
 
         path.pop().ok_or(Error::ShiftEmptyPath)?;
         // path should always be empty at this point
@@ -41,6 +76,7 @@ fn apply<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     let tip = path.last().ok_or(Error::ShiftEmptyPath)?.clone();
@@ -58,7 +94,7 @@ fn apply<'ctx, 'input: 'ctx>(
         path.push(tip.clone());
         counts.push(0);
         for rhs in rhs.iter() {
-            insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
+            insert_val_to_rhs(rhs, v.clone(), path, counts, budget, out)?;
         }
         counts.pop();
         path.pop().ok_or(Error::ShiftEmptyPath)?;
@@ -67,13 +103,13 @@ fn apply<'ctx, 'input: 'ctx>(
     match tip.1 {
         Value::Object(input) => {
             for (k, v) in input.iter() {
-                match_obj_and_key(obj, path, counts, Cow::Borrowed(k), v, out)?;
+                match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), v, out)?;
             }
         }
         Value::Bool(b) => {
             let k = if *b { "true" } else { "false" };
 
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Array(arr) => {
             for (k, v) in arr.iter().enumerate() {
@@ -82,6 +118,7 @@ fn apply<'ctx, 'input: 'ctx>(
                     obj,
                     path,
                     counts,
+                    budget,
                     // this makes the downstream functions to do some extra allocations.
                     // could avoid some of these allocations by mapping some small indexes to static str's
                     Cow::Owned(k),
@@ -93,14 +130,14 @@ fn apply<'ctx, 'input: 'ctx>(
         Value::Number(n) => {
             let k = n.to_string();
 
-            match_obj_and_key(obj, path, counts, Cow::Owned(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Owned(k), tip.1, out)?;
         }
         Value::String(k) => {
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Null => {
             let k = "null";
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
     };
 
@@ -114,6 +151,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     k: Cow<'input, str>,
     v: &'input Value,
     out: &'ctx mut Value,
@@ -123,7 +161,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         if lit == k {
             path.push((vec![lit], v));
             counts.push(0);
-            apply_match(v, rhs, path, counts, out)?;
+            apply_match(v, rhs, path, counts, budget, out)?;
             pop_matched_level(path, counts)?;
             return Ok(());
         }
@@ -134,7 +172,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         if m == k {
             path.push((vec![m], v));
             counts.push(0);
-            apply_match(v, rhs, path, counts, out)?;
+            apply_match(v, rhs, path, counts, budget, out)?;
             pop_matched_level(path, counts)?;
             return Ok(());
         }
@@ -145,7 +183,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
             if let Some(m) = match_stars(&stars.0, Cow::clone(&k)) {
                 path.push((m, v));
                 counts.push(0);
-                apply_match(v, rhs, path, counts, out)?;
+                apply_match(v, rhs, path, counts, budget, out)?;
                 pop_matched_level(path, counts)?;
                 return Ok(());
             }
@@ -171,13 +209,14 @@ fn apply_match<'ctx, 'input: 'ctx>(
     rhs: &'input REntry,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     match rhs {
-        REntry::Obj(object) => apply(object, path, counts, out),
+        REntry::Obj(object) => apply(object, path, counts, budget, out),
         REntry::Rhs(rhs) => {
             for rhs in rhs.iter() {
-                insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
+                insert_val_to_rhs(rhs, v.clone(), path, counts, budget, out)?;
             }
             Ok(())
         }
@@ -187,6 +226,12 @@ fn apply_match<'ctx, 'input: 'ctx>(
 
 // Evaluate an @ expression into a json value using the given path
 fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
+    lookup_at(at, path).map(Value::clone)
+}
+
+// Find the value an @ expression points at, without copying it. Index expressions use this
+// so they can check a string's length before anything copies it.
+fn lookup_at<'v>(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &'v Value)]) -> Result<&'v Value> {
     if at.0 >= path.len() {
         return Err(Error::PathIndexOutOfRange {
             idx: at.0,
@@ -194,13 +239,17 @@ fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Va
         });
     }
 
-    let v = &path[path.len() - at.0 - 1];
+    let v = path[path.len() - at.0 - 1].1;
 
-    eval_rhs(at.1, v.1, path)
+    lookup_rhs(at.1, v, path)
 }
 
-// Evaluate a rhs expression into a json value using the given path
-fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
+// Find the value a rhs expression points at inside `v`, using the given path
+fn lookup_rhs<'v>(
+    rhs: &Rhs,
+    v: &'v Value,
+    path: &[(Vec<Cow<'_, str>>, &Value)],
+) -> Result<&'v Value> {
     let mut v = v;
 
     for part in rhs.0.iter() {
@@ -208,25 +257,9 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
             RhsPart::Index(idx_op) => match v {
                 Value::Array(a) => {
                     let idx = match idx_op {
-                        IndexOp::Amp(idx0, idx1) => {
-                            let m = get_match((*idx0, *idx1), path)?;
-                            let raw = m.to_string();
-                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                        }
+                        IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                         IndexOp::Literal(idx) => *idx,
-                        IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
-                            Value::Number(n) => n
-                                .clone()
-                                .as_u64()
-                                .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
-                                .try_into()
-                                .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                            Value::String(s) => {
-                                let raw = s.clone();
-                                raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                            }
-                            v => return Err(Error::InvalidIndexVal(v)),
-                        },
+                        IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
                         // `#` only counts output matches, so it has no meaning in a lookup
                         IndexOp::Hash(_) | IndexOp::Empty => {
                             return Err(Error::UnexpectedRhsEntry);
@@ -258,7 +291,40 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
         }
     }
 
-    Ok(Value::clone(v))
+    Ok(v)
+}
+
+// usize::MAX has 20 decimal digits. A longer index string can only be valid with leading zeros,
+// and parsing it costs time in proportion to its length. An ancestor index such as `[&1]` is
+// parsed again for every child, so a 1 MB key could cost many seconds of CPU.
+const MAX_INDEX_LEN: usize = 20;
+
+// Parse an array index taken from a match or an input value.
+// Rejects over-length strings before parsing, and leaves them out of the error.
+fn parse_index(raw: &str) -> Result<usize> {
+    if raw.len() > MAX_INDEX_LEN {
+        return Err(Error::IndexTooLong {
+            len: raw.len(),
+            max: MAX_INDEX_LEN,
+        });
+    }
+
+    raw.parse().map_err(|e| Error::InvalidIndex {
+        raw: raw.to_owned(),
+        source: e,
+    })
+}
+
+// Turn the value an `[@(...)]` expression points at into an array index.
+fn index_from_value(v: &Value) -> Result<usize> {
+    match v {
+        Value::Number(n) => n
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| Error::InvalidIndexVal(Value::Number(n.clone()))),
+        Value::String(s) => parse_index(s),
+        v => Err(Error::InvalidIndexVal(v.clone())),
+    }
 }
 
 // Evaluate a rhs expression into a string
@@ -305,6 +371,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
     v: Value,
     path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
     counts: &[usize],
+    budget: &mut PaddingBudget,
     out: &mut Value,
 ) -> Result<()> {
     let mut out = out;
@@ -323,25 +390,9 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 };
 
                 let idx = match idx_op {
-                    IndexOp::Amp(idx0, idx1) => {
-                        let m = get_match((*idx0, *idx1), path)?;
-                        let raw = m.to_string();
-                        raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                    }
+                    IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                     IndexOp::Literal(idx) => *idx,
-                    IndexOp::At(idx, rhs) => match eval_at((*idx, rhs), path)? {
-                        Value::Number(n) => n
-                            .clone()
-                            .as_u64()
-                            .ok_or(Error::InvalidIndexVal(Value::Number(n.clone())))?
-                            .try_into()
-                            .map_err(|_| Error::InvalidIndexVal(Value::Number(n)))?,
-                        Value::String(s) => {
-                            let raw = s.clone();
-                            raw.parse().map_err(|e| Error::InvalidIndex { raw, source: e })?
-                        }
-                        v => return Err(Error::InvalidIndexVal(v)),
-                    },
+                    IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
                     IndexOp::Hash(level) => get_match_count(*level, counts)?,
                     IndexOp::Empty => {
                         arr.push(Value::Null);
@@ -350,6 +401,8 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                     }
                 };
 
+                // Charge before pushing, so an index over the budget allocates nothing.
+                budget.reserve(idx, arr.len())?;
                 while arr.len() <= idx {
                     arr.push(Value::Null);
                 }
@@ -571,5 +624,200 @@ mod test {
         let result = run(json!({ "a": { "@(1,arr[#1])": "out" } }), json!({ "a": 1, "arr": [1] }));
 
         assert!(result.is_err(), "got {:?}", result);
+    }
+
+    fn sparse_objects(count: usize, key: &str) -> Value {
+        let mut input = serde_json::Map::new();
+        for i in 0..count {
+            input.insert(format!("o{}", i), json!({ key: i }));
+        }
+        Value::Object(input)
+    }
+
+    #[test]
+    fn test_amp_index_padding_limit_boundary() {
+        let at_limit = MAX_ARRAY_PADDING.to_string();
+        let output = run(json!({ "*": "a[&0]" }), json!({ at_limit: "x" })).unwrap();
+        let arr = output["a"].as_array().unwrap();
+        assert_eq!(arr.len(), MAX_ARRAY_PADDING + 1);
+        assert_eq!(arr[MAX_ARRAY_PADDING], json!("x"));
+
+        let over_limit = (MAX_ARRAY_PADDING + 1).to_string();
+        let result = run(json!({ "*": "a[&0]" }), json!({ over_limit: "x" }));
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx, len: 0, used: 0, max: MAX_ARRAY_PADDING }) if idx == MAX_ARRAY_PADDING + 1),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_at_index_over_padding_limit_is_an_error() {
+        let spec = json!({ "v": "out[@(1,idx)]" });
+
+        let from_number = run(spec.clone(), json!({ "v": "x", "idx": MAX_ARRAY_PADDING + 1 }));
+        assert!(matches!(from_number, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_number);
+
+        let from_string = run(spec.clone(), json!({ "v": "x", "idx": "200000" }));
+        assert!(matches!(from_string, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_string);
+
+        let output = run(spec, json!({ "v": "x", "idx": 3 })).unwrap();
+        assert_eq!(output, json!({ "out": [null, null, null, "x"] }));
+    }
+
+    #[test]
+    fn test_huge_amp_index_fails_without_allocating() {
+        let result = run(json!({ "*": "a[&0]" }), json!({ "10000000000": "x" }));
+
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx: 10_000_000_000, len: 0, .. })),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_padding_across_many_arrays_is_bounded() {
+        let result = run(json!({ "*": { "*": "&1[&0]" } }), sparse_objects(1_000, "99999"));
+
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_positional_reshaping_costs_no_padding() {
+        let items: Vec<Value> = (0..200_000).map(|i| json!({ "qty": i })).collect();
+        let output = run(
+            json!({ "items": { "*": { "qty": "data.items[&1].qty" } } }),
+            json!({ "items": items }),
+        )
+        .unwrap();
+
+        let out_items = output["data"]["items"].as_array().unwrap();
+        assert_eq!(out_items.len(), 200_000);
+        assert_eq!(out_items[199_999], json!({ "qty": 199_999 }));
+    }
+
+    #[test]
+    fn test_small_sparse_writes_share_one_budget() {
+        let spec = json!({ "*": { "*": "&1[&0]" } });
+
+        // Each object pads 1,000 slots, so 100 objects use the whole budget.
+        let output = run(spec.clone(), sparse_objects(100, "1000")).unwrap();
+        assert_eq!(output["o99"].as_array().unwrap().len(), 1_001);
+
+        let result = run(spec, sparse_objects(101, "1000"));
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_padding_budget_resets_for_each_run() {
+        let shift: Shift = serde_json::from_value(json!({ "*": "a[&0]" })).expect("parsed spec");
+        let input = json!({ MAX_ARRAY_PADDING.to_string(): "x" });
+
+        assert!(shift.apply(&input).is_ok());
+        assert!(shift.apply(&input).is_ok());
+    }
+
+    #[test]
+    fn test_padding_error_reports_budget_already_used() {
+        let result = run(
+            json!({ "*": { "*": "&1[&0]" } }),
+            json!({ "a": { "60000": 1 }, "b": { "60000": 1 } }),
+        );
+
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx: 60_000, len: 0, used: 60_000, .. })),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_literal_index_is_charged_against_the_budget() {
+        let result = run(json!({ "a": "out[200000]" }), json!({ "a": 1 }));
+
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { idx: 200_000, .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_nested_arrays_share_one_budget() {
+        let spec = json!({ "*": { "*": "a[&1][&0]" } });
+
+        // 50,000 + 49,999 gap slots fits; 50,000 + 50,001 does not.
+        let output = run(spec.clone(), json!({ "50000": { "49999": 1 } })).unwrap();
+        assert_eq!(output["a"][50_000][49_999], json!(1));
+
+        let result = run(spec, json!({ "50000": { "50001": 1 } }));
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    fn long_index(len: usize) -> String {
+        "0".repeat(len - 1) + "1"
+    }
+
+    #[test]
+    fn test_amp_index_string_over_max_len_is_an_error() {
+        let key = long_index(MAX_INDEX_LEN + 1);
+        let result = run(json!({ "*": "a[&0]" }), json!({ key: "x" }));
+
+        assert!(
+            matches!(result, Err(Error::IndexTooLong { len, max: MAX_INDEX_LEN }) if len == MAX_INDEX_LEN + 1),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_at_index_string_over_max_len_is_an_error() {
+        let result = run(
+            json!({ "v": "out[@(1,idx)]" }),
+            json!({ "v": "x", "idx": long_index(MAX_INDEX_LEN + 1) }),
+        );
+
+        assert!(matches!(result, Err(Error::IndexTooLong { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_index_string_at_max_len_still_parses() {
+        let idx = "00000000000000000005";
+        assert_eq!(idx.len(), MAX_INDEX_LEN);
+
+        let from_amp = run(json!({ "*": "a[&0]" }), json!({ idx: "x" })).unwrap();
+        assert_eq!(from_amp, json!({ "a": [null, null, null, null, null, "x"] }));
+
+        let from_at = run(json!({ "v": "out[@(1,idx)]" }), json!({ "v": "x", "idx": idx })).unwrap();
+        assert_eq!(from_at, json!({ "out": [null, null, null, null, null, "x"] }));
+    }
+
+    #[test]
+    fn test_lookup_index_string_over_max_len_is_an_error() {
+        let at_spec = json!({ "a": { "@(1,arr[@(1,i)])": "out" } });
+        let output = run(at_spec.clone(), json!({ "a": {}, "arr": [10, 20], "i": "1" })).unwrap();
+        assert_eq!(output, json!({ "out": 20 }));
+
+        let from_at = run(at_spec, json!({ "a": {}, "arr": [10, 20], "i": long_index(MAX_INDEX_LEN + 1) }));
+        assert!(matches!(from_at, Err(Error::IndexTooLong { .. })), "got {:?}", from_at);
+
+        let amp_spec = json!({ "k*": { "@(1,arr[&(0,1)])": "out" } });
+        let output = run(amp_spec.clone(), json!({ "k1": {}, "arr": [10, 20] })).unwrap();
+        assert_eq!(output, json!({ "out": 20 }));
+
+        let key = format!("k{}", long_index(MAX_INDEX_LEN + 1));
+        let from_amp = run(amp_spec, json!({ key: {}, "arr": [10, 20] }));
+        assert!(matches!(from_amp, Err(Error::IndexTooLong { .. })), "got {:?}", from_amp);
+    }
+
+    #[test]
+    fn test_long_ancestor_index_string_fails_fast() {
+        let children: serde_json::Map<String, Value> = (0..10_000).map(|i| (i.to_string(), json!(i))).collect();
+        let result = run(json!({ "*": { "*": "out[&1]" } }), json!({ long_index(100_000): children }));
+        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
+
+        let items: Vec<Value> = (0..10_000).map(|i| json!({ "v": i })).collect();
+        let result = run(
+            json!({ "items": { "*": { "v": "out[@(3,idx)]" } } }),
+            json!({ "items": items, "idx": long_index(100_000) }),
+        );
+        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
     }
 }
