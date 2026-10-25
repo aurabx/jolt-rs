@@ -58,7 +58,8 @@ impl<'input> Tokenizer<'input> {
 
     /// Reads everything left in the input as one literal string. Special characters such as `.`
     /// lose their meaning, which lets a `#` literal hold a URL. A `\` still escapes the next
-    /// special character, so older specs that wrote `\.` keep working.
+    /// special character, so older specs that wrote `\.` keep working. A `\` before any other
+    /// character, or at the end, is kept as written, so `#C:\Users` stays `C:\Users`.
     pub fn rest_as_literal(&mut self) -> Result<String, ParseError> {
         if self.buf.is_some() {
             return Err(ParseError {
@@ -69,10 +70,17 @@ impl<'input> Tokenizer<'input> {
 
         let mut literal = String::new();
         while let Some(c) = self.chars.next() {
-            if c == '\\' {
-                literal.push(self.escape()?);
-            } else {
+            if c != '\\' {
                 literal.push(c);
+                continue;
+            }
+            match self.chars.next() {
+                Some(next) if SPECIAL_CHARS.contains(&next) => literal.push(next),
+                Some(next) => {
+                    literal.push('\\');
+                    literal.push(next);
+                }
+                None => literal.push('\\'),
             }
         }
 

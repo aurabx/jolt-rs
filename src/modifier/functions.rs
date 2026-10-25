@@ -129,10 +129,15 @@ fn join(args: &[Value]) -> Result<Value> {
     Ok(Value::String(parts.join(&separator)))
 }
 
+/// Upper bound on the number of parts `split` returns. Each part becomes its own JSON string, so
+/// an unbounded split of a large, attacker-supplied value would use many times its size in memory.
+const MAX_SPLIT_PARTS: usize = 100_000;
+
 /// Split a string into an array of strings on a separator.
 ///
-/// Matches Java JOLT's `split(separator, string)` argument order. Java treats the separator as a
-/// regular expression; here it is a plain string. A null input yields null, as in Java.
+/// Matches Java JOLT's `split(separator, string)` argument order, and like Java's `String.split`
+/// it drops trailing empty parts. Java treats the separator as a regular expression; here it is a
+/// plain string. A null input yields null, as in Java. Numbers and booleans are split as text.
 fn split(args: &[Value]) -> Result<Value> {
     if args.len() != 2 {
         return Err(Error::FunctionArgumentError(format!(
@@ -150,17 +155,32 @@ fn split(args: &[Value]) -> Result<Value> {
 
     let s = match &args[1] {
         Value::Null => return Ok(Value::Null),
-        Value::String(s) => s,
-        other => {
+        Value::Array(_) | Value::Object(_) => {
             return Err(Error::FunctionArgumentError(format!(
                 "split expects a string to split, got {}",
-                other
+                args[1]
             )))
         }
+        scalar => value_to_string(scalar),
     };
 
+    let mut parts: Vec<&str> = s.split(separator.as_str()).take(MAX_SPLIT_PARTS + 1).collect();
+    if parts.len() > MAX_SPLIT_PARTS {
+        return Err(Error::FunctionArgumentError(format!(
+            "split would produce more than {} parts",
+            MAX_SPLIT_PARTS
+        )));
+    }
+    // Java keeps the input as the only part when the separator never occurs, even if it is empty
+    if parts.len() > 1 {
+        while parts.last().is_some_and(|part| part.is_empty()) {
+            parts.pop();
+        }
+    }
+
     Ok(Value::Array(
-        s.split(separator.as_str())
+        parts
+            .into_iter()
             .map(|part| Value::String(part.to_string()))
             .collect(),
     ))
@@ -236,6 +256,14 @@ mod tests {
     }
 
     #[test]
+    fn test_split_drops_trailing_empty_parts() {
+        assert_eq!(split(&[json!(","), json!("a,b,,")]).unwrap(), json!(["a", "b"]));
+        assert_eq!(split(&[json!(","), json!(",")]).unwrap(), json!([]));
+        assert_eq!(split(&[json!(","), json!(",a")]).unwrap(), json!(["", "a"]));
+        assert_eq!(split(&[json!(","), json!("")]).unwrap(), json!([""]));
+    }
+
+    #[test]
     fn test_split_multi_char_separator_is_not_a_regex() {
         let args = vec![json!(". "), json!("a. b.c")];
         let result = split(&args).unwrap();
@@ -256,9 +284,27 @@ mod tests {
     }
 
     #[test]
+    fn test_split_scalars_are_split_as_text() {
+        assert_eq!(split(&[json!("."), json!(1.5)]).unwrap(), json!(["1", "5"]));
+        assert_eq!(split(&[json!(","), json!(12)]).unwrap(), json!(["12"]));
+        assert_eq!(split(&[json!("u"), json!(true)]).unwrap(), json!(["tr", "e"]));
+    }
+
+    #[test]
     fn test_split_rejects_bad_arguments() {
         assert!(split(&[json!(",")]).is_err());
         assert!(split(&[json!(""), json!("abc")]).is_err());
-        assert!(split(&[json!(","), json!(12)]).is_err());
+        assert!(split(&[json!(","), json!(["a,b"])]).is_err());
+        assert!(split(&[json!(","), json!({"a": "b"})]).is_err());
+    }
+
+    #[test]
+    fn test_split_part_limit() {
+        let at_limit = ",".repeat(MAX_SPLIT_PARTS - 1) + "x";
+        assert!(split(&[json!(","), json!(at_limit)]).is_ok());
+
+        let over_limit = ",".repeat(MAX_SPLIT_PARTS) + "x";
+        let err = split(&[json!(","), json!(over_limit)]).unwrap_err();
+        assert!(err.to_string().contains("more than"), "got: {}", err);
     }
 }

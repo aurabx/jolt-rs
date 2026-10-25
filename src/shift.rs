@@ -499,3 +499,77 @@ fn get_match_count(level: usize, counts: &[usize]) -> Result<usize> {
 
     Ok(counts[counts.len() - level - 1])
 }
+
+#[cfg(test)]
+mod test {
+    use serde_json::{json, Value};
+    use super::*;
+
+    fn run(spec: Value, input: Value) -> Result<Value> {
+        let shift: Shift = serde_json::from_value(spec).expect("parsed spec");
+        shift.apply(&input)
+    }
+
+    #[test]
+    fn test_hash_index_on_leaf_counts_matched_siblings() {
+        let output = run(json!({ "*": "out[#1]" }), json!({ "a": 1, "b": 2 })).unwrap();
+
+        assert_eq!(output, json!({ "out": [1, 2] }));
+    }
+
+    #[test]
+    fn test_hash_index_ignores_special_keys() {
+        let output = run(
+            json!({
+                "a": {
+                    "#lit": "o.l",
+                    "@(1,z)": "o.z",
+                    "$": "o.d",
+                    "b": "out[#1]",
+                    "c": "out[#1]"
+                }
+            }),
+            json!({ "a": { "b": 1, "c": 2 }, "z": "zz" }),
+        )
+        .unwrap();
+
+        assert_eq!(output["out"], json!([1, 2]));
+        assert_eq!(output["o"], json!({ "l": "lit", "z": "zz", "d": "a" }));
+    }
+
+    #[test]
+    fn test_hash_index_follows_input_order_and_skips_unmatched() {
+        let output = run(
+            json!({ "x*": { "v": "out[#2]" } }),
+            json!({ "x2": { "v": "two" }, "y": { "v": "skip" }, "x1": { "v": "one" } }),
+        )
+        .unwrap();
+
+        assert_eq!(output, json!({ "out": ["two", "one"] }));
+    }
+
+    #[test]
+    fn test_hash_index_over_input_array() {
+        let output = run(
+            json!({ "items": { "*": { "id": "ids[#2]" } } }),
+            json!({ "items": [{ "id": 10 }, { "id": 20 }, { "id": 30 }] }),
+        )
+        .unwrap();
+
+        assert_eq!(output, json!({ "ids": [10, 20, 30] }));
+    }
+
+    #[test]
+    fn test_hash_index_out_of_range_is_an_error() {
+        let result = run(json!({ "a": "out[#5]" }), json!({ "a": 1 }));
+
+        assert!(matches!(result, Err(Error::PathIndexOutOfRange { idx: 5, .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_hash_index_in_lookup_is_rejected() {
+        let result = run(json!({ "a": { "@(1,arr[#1])": "out" } }), json!({ "a": 1, "arr": [1] }));
+
+        assert!(result.is_err(), "got {:?}", result);
+    }
+}

@@ -1,17 +1,37 @@
+use std::borrow::Cow;
+
 use serde_json::{Map, Value};
 use crate::spec::Spec;
 
 /// Applies the `remove` operation.
 ///
-/// Follows Java JOLT's Removr. Spec keys match input keys literally, except that `*` matches any
-/// run of characters (`*` alone matches every key). On arrays, keys match element indexes, so
+/// Spec keys match input keys literally, except that `*` matches any run of characters (`*` alone
+/// matches every key) and `\*` matches a literal `*`. On arrays, keys match element indexes, so
 /// `"0"` removes the first element and `"*"` walks every element. An object in the spec is walked
-/// into; any other spec value removes the matched entries.
+/// into, and so is an array, whose elements stand for indexes `0`, `1` and so on. Any other spec
+/// value removes the matched entries.
+///
+/// Like Java JOLT's Removr, but leaf values other than `""` are accepted rather than rejected.
 pub(crate) fn remove(mut input: Value, spec: &Spec) -> Value {
-    if let Value::Object(spec) = spec.value() {
-        remove_matching(&mut input, spec);
+    if let Some(spec) = child_spec(spec.value()) {
+        remove_matching(&mut input, &spec);
     }
     input
+}
+
+/// Returns the nested spec to walk into, or `None` when the spec value is a leaf that removes.
+fn child_spec(spec_value: &Value) -> Option<Cow<'_, Map<String, Value>>> {
+    match spec_value {
+        Value::Object(map) => Some(Cow::Borrowed(map)),
+        Value::Array(items) => Some(Cow::Owned(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (index.to_string(), item.clone()))
+                .collect(),
+        )),
+        _ => None,
+    }
 }
 
 fn remove_matching(target: &mut Value, spec: &Map<String, Value>) {
@@ -23,20 +43,22 @@ fn remove_matching(target: &mut Value, spec: &Map<String, Value>) {
 }
 
 fn remove_from_object(map: &mut Map<String, Value>, spec: &Map<String, Value>) {
-    for (pattern, spec_value) in spec {
+    for (raw_pattern, spec_value) in spec {
+        let pattern = KeyPattern::parse(raw_pattern);
         let keys: Vec<String> = map
             .keys()
-            .filter(|key| key_matches(pattern, key))
+            .filter(|key| pattern.matches(key))
             .cloned()
             .collect();
+        let child = child_spec(spec_value);
         for key in keys {
-            match spec_value {
-                Value::Object(child_spec) => {
-                    if let Some(child) = map.get_mut(&key) {
-                        remove_matching(child, child_spec);
+            match &child {
+                Some(child) => {
+                    if let Some(value) = map.get_mut(&key) {
+                        remove_matching(value, child);
                     }
                 }
-                _ => {
+                None => {
                     map.remove(&key);
                 }
             }
@@ -45,49 +67,102 @@ fn remove_from_object(map: &mut Map<String, Value>, spec: &Map<String, Value>) {
 }
 
 fn remove_from_array(arr: &mut Vec<Value>, spec: &Map<String, Value>) {
-    // Indexes are collected first and removed together, so that removing one element does not
-    // shift the positions that later spec keys refer to.
-    let mut doomed: Vec<usize> = Vec::new();
-    for (pattern, spec_value) in spec {
-        for index in 0..arr.len() {
-            if !key_matches(pattern, &index.to_string()) {
-                continue;
-            }
-            match spec_value {
-                Value::Object(child_spec) => remove_matching(&mut arr[index], child_spec),
-                _ => doomed.push(index),
+    // Elements are marked first and dropped in one pass. That keeps the positions later spec keys
+    // refer to stable, and avoids the quadratic cost of removing elements one at a time.
+    let mut doomed = vec![false; arr.len()];
+    for (raw_pattern, spec_value) in spec {
+        let pattern = KeyPattern::parse(raw_pattern);
+        let child = child_spec(spec_value);
+        for index in pattern.matching_indexes(arr.len()) {
+            match &child {
+                Some(child) => remove_matching(&mut arr[index], child),
+                None => doomed[index] = true,
             }
         }
     }
-    doomed.sort_unstable();
-    doomed.dedup();
-    for index in doomed.into_iter().rev() {
-        arr.remove(index);
+
+    let mut doomed = doomed.into_iter();
+    arr.retain(|_| !doomed.next().unwrap_or(false));
+}
+
+/// A remove spec key: either a literal, or a glob split on unescaped `*`.
+enum KeyPattern {
+    Literal(String),
+    Glob(Vec<String>),
+}
+
+impl KeyPattern {
+    fn parse(raw: &str) -> Self {
+        let mut segments = vec![String::new()];
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '*' => segments.push(String::new()),
+                '\\' if matches!(chars.peek(), Some('*') | Some('\\')) => {
+                    if let (Some(escaped), Some(segment)) = (chars.next(), segments.last_mut()) {
+                        segment.push(escaped);
+                    }
+                }
+                other => {
+                    if let Some(segment) = segments.last_mut() {
+                        segment.push(other);
+                    }
+                }
+            }
+        }
+
+        if segments.len() == 1 {
+            KeyPattern::Literal(segments.remove(0))
+        } else {
+            KeyPattern::Glob(segments)
+        }
+    }
+
+    fn matches(&self, key: &str) -> bool {
+        match self {
+            KeyPattern::Literal(literal) => literal == key,
+            KeyPattern::Glob(segments) => glob_matches(segments, key),
+        }
+    }
+
+    /// Lists the array indexes below `len` that this pattern selects.
+    fn matching_indexes(&self, len: usize) -> Vec<usize> {
+        match self {
+            // Parsed as a number, as Java does, so "01" selects index 1.
+            KeyPattern::Literal(literal) => literal
+                .parse::<usize>()
+                .ok()
+                .filter(|index| *index < len)
+                .into_iter()
+                .collect(),
+            KeyPattern::Glob(segments) if segments.iter().all(|s| s.is_empty()) => (0..len).collect(),
+            KeyPattern::Glob(segments) => (0..len)
+                .filter(|index| glob_matches(segments, &index.to_string()))
+                .collect(),
+        }
     }
 }
 
-/// Matches a key against a pattern where `*` stands for any run of characters.
-fn key_matches(pattern: &str, key: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == key;
-    }
-
-    let mut segments = pattern.split('*');
-    // `split` always yields at least one item, and a pattern containing `*` yields at least two.
-    let first = segments.next().unwrap_or("");
-    let Some(mut rest) = key.strip_prefix(first) else {
+/// Matches a key against glob segments. The segments are the text between the `*`s, so there are
+/// always at least two.
+fn glob_matches(segments: &[String], key: &str) -> bool {
+    let Some((first, rest_segments)) = segments.split_first() else {
+        return false;
+    };
+    let Some((last, middle)) = rest_segments.split_last() else {
+        return false;
+    };
+    let Some(mut rest) = key.strip_prefix(first.as_str()) else {
         return false;
     };
 
-    let mut segments: Vec<&str> = segments.collect();
-    let last = segments.pop().unwrap_or("");
-    for segment in segments {
-        match rest.find(segment) {
+    for segment in middle {
+        match rest.find(segment.as_str()) {
             Some(pos) => rest = &rest[pos + segment.len()..],
             None => return false,
         }
     }
-    rest.len() >= last.len() && rest.ends_with(last)
+    rest.len() >= last.len() && rest.ends_with(last.as_str())
 }
 
 #[cfg(test)]
@@ -229,6 +304,10 @@ mod test {
         assert_eq!(output, json!({ "e": 3 }));
     }
 
+    fn key_matches(pattern: &str, key: &str) -> bool {
+        KeyPattern::parse(pattern).matches(key)
+    }
+
     #[test]
     fn test_key_matches() {
         assert!(key_matches("*", ""));
@@ -240,5 +319,60 @@ mod test {
         // the prefix and suffix must not overlap
         assert!(!key_matches("ab*ba", "aba"));
         assert!(!key_matches("a", "ab"));
+        assert!(key_matches("é*ü", "éxü"));
+    }
+
+    #[test]
+    fn test_escaped_star_is_literal() {
+        assert!(key_matches("a\\*", "a*"));
+        assert!(!key_matches("a\\*", "ab"));
+        assert!(key_matches("a\\**", "a*b"));
+        assert!(key_matches("a\\\\b", "a\\b"));
+        // a backslash before any other character is kept as written
+        assert!(key_matches("a\\b", "a\\b"));
+    }
+
+    #[test]
+    fn test_escaped_star_removes_only_literal_key() {
+        let output = run(json!({ "a\\*": "" }), json!({ "a*": 1, "ab": 2 }));
+
+        assert_eq!(output, json!({ "ab": 2 }));
+    }
+
+    #[test]
+    fn test_array_in_spec_walks_indexes() {
+        let output = run(
+            json!({ "patient": [{ "ssn": "" }] }),
+            json!({ "patient": [{ "ssn": 1, "id": "a" }, { "ssn": 2, "id": "b" }] }),
+        );
+
+        assert_eq!(output, json!({ "patient": [{ "id": "a" }, { "ssn": 2, "id": "b" }] }));
+    }
+
+    #[test]
+    fn test_array_index_key_is_parsed_as_number() {
+        let output = run(json!({ "items": { "01": "" } }), json!({ "items": ["a", "b", "c"] }));
+
+        assert_eq!(output, json!({ "items": ["a", "c"] }));
+    }
+
+    #[test]
+    fn test_partial_glob_on_array_indexes() {
+        let input: Vec<u32> = (0..25).collect();
+        let output = run(json!({ "items": { "*0": "", "1*": "" } }), json!({ "items": input }));
+
+        let expected: Vec<u32> = (0..25).filter(|i| i % 10 != 0 && !i.to_string().starts_with('1')).collect();
+        assert_eq!(output, json!({ "items": expected }));
+    }
+
+    #[test]
+    fn test_partial_glob_on_large_array_is_linear() {
+        let input: Vec<u32> = (0..200_000).collect();
+        let started = std::time::Instant::now();
+        let output = run(json!({ "items": { "*0": "" } }), json!({ "items": input }));
+
+        assert_eq!(output["items"].as_array().map(Vec::len), Some(180_000));
+        // generous bound: the old one-at-a-time removal took several seconds here
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }

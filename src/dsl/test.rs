@@ -680,3 +680,12 @@ fn test_parse_rhs_hash_index_requires_number() {
     assert!(Rhs::parse("out[#x]").is_err());
     assert!(Rhs::parse("out[#-1]").is_err());
 }
+
+#[test]
+fn test_parse_lhs_square_keeps_backslash_before_ordinary_char() {
+    LhsTestCase {
+        expr: "#C:\\Users\\x\\.y\\",
+        expected: Lhs::Square("C:\\Users\\x.y\\".into()),
+    }
+    .run();
+}

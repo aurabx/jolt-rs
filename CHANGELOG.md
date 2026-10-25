@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`[#n]` array index** on the RHS of `shift`, matching Java JOLT. It uses the match count of the spec level `n` steps up as the index, which turns a map into a dense array.
-- **`split` function** for `modify-*-beta`: `=split(',', @(1,tags))`. The separator is a plain string, not a regular expression as in Java JOLT.
-- **Wildcards in `remove`**: `*` matches any run of characters in a spec key. Keys also match array indexes, so `remove` can now delete array elements and walk into them.
+- **`split` function** for `modify-*-beta`: `=split(',', @(1,tags))`. The separator is a plain string, not a regular expression as in Java JOLT. Trailing empty parts are dropped, as in Java. More than 100,000 parts is an error, to bound memory use.
 
 ### Changed
 - **Breaking:** `default` now replaces `null` input values, matching Java JOLT's Defaultr. Before, a `null` was kept.
 - **Breaking:** `dsl::IndexOp` has a new `Hash` variant. Exhaustive matches on it must handle it.
+- **Breaking:** `remove` treats `*` in a spec key as a wildcard. `"a*"` used to remove only a key named `a*`; it now removes every key starting with `a`. Write `a\*` for the literal key. Keys also match array indexes, so `remove` can delete array elements and walk into them.
+- **Breaking:** `default` on a `null` root now returns an object holding the defaults, as in Java JOLT. It used to return `null`.
 - A `#` literal on the LHS now runs to the end of the key, so it can hold dots, as in `#http://example.org`. The `\.` escape still works.
 - `default` with an empty object in the spec now writes an empty object for an absent key, as in Java JOLT.
 

@@ -276,7 +276,8 @@ into a dense array:
     }
 }
 </pre>
-writes `primary` to `out[0]` and `quality` to `out[1]`, whatever other keys `ratings` holds.
+writes the matched entries to `out[0]`, `out[1]` and so on, skipping any other keys `ratings` holds.
+The order follows the input, not the spec.
 
 See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java).
 
@@ -327,7 +328,7 @@ The `modify-overwrite-beta` operation allows you to modify values using function
 - **`substring`**: Extract a substring (start, end)
 - **`trim`**: Remove leading/trailing whitespace
 - **`join`**: Join array elements with a separator
-- **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression.
+- **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression. Trailing empty parts are dropped, as in Java. A split that would produce more than 100,000 parts fails.
 
 There is no date or time function, and `${...}` substitution is not supported. A string such as `${now}` is copied as is. Pass values like the current time in through the input instead.
 
@@ -438,8 +439,8 @@ the output JSON will be:
 </pre>
 
 Spec keys can use `*` to match any run of characters. `"*"` matches every key, and `"tmp_*"`
-matches every key that starts with `tmp_`. On arrays, keys match element indexes, so `"0"` removes
-the first element and `"*"` walks every element:
+matches every key that starts with `tmp_`. Write `\*` to match a literal `*`. On arrays, keys match
+element indexes, so `"0"` removes the first element and `"*"` walks every element:
 <pre>
 {
     "patients": {
@@ -450,6 +451,13 @@ the first element and `"*"` walks every element:
 }
 </pre>
 removes `ssn` from every element of the `patients` array.
+
+## Differences from Java JOLT
+
+- `default` does not support `*`, `|` or `key[]` keys. A `*` key is written as a literal key.
+- `remove` accepts any leaf value. Java accepts only `""` or an object.
+- `split` takes a plain separator, not a regular expression.
+- Neither library supports `${...}` substitution. A string such as `${now}` is copied as is.
 
 ## Contributing
 

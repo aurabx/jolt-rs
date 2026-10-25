@@ -49,6 +49,7 @@ Number: '1-9' '0-9'+;
 
 Inside a `#` literal on the left hand side these characters have no special meaning, so they do
 not need escaping. An escape is still honoured there: `#a\.b` and `#a.b` both write `a.b`.
+A `\` before any other character, or at the end, is kept as written: `#C:\Users` writes `C:\Users`.
 
 ## Match counts
 
