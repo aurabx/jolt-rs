@@ -25,6 +25,11 @@ fn test_all() {
         "from_benchmark",
         "nested_variables",
         "modifier_concat_names",
+        "default_array_and_null",
+        "remove_wildcards",
+        "shift_hash_index",
+        "shift_literal_url",
+        "modifier_split",
     ];
     for name in tests {
         do_test(name);

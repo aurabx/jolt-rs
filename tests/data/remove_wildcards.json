@@ -1,0 +1,30 @@
+{
+  "input": {
+    "patients": [
+      { "id": "a", "ssn": "1", "internal_note": "x", "internal_flag": true },
+      { "id": "b", "ssn": "2" }
+    ],
+    "audit": { "first": 1, "second": 2 }
+  },
+  "spec": [
+    {
+      "operation": "remove",
+      "spec": {
+        "patients": {
+          "*": {
+            "ssn": "",
+            "internal_*": ""
+          }
+        },
+        "audit": { "*": "" }
+      }
+    }
+  ],
+  "expected": {
+    "patients": [
+      { "id": "a" },
+      { "id": "b" }
+    ],
+    "audit": {}
+  }
+}

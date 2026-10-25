@@ -20,13 +20,14 @@ RhsEntry: AmpExpr |
             Key;
 IndexOp: AmpExpr
             | Number
-            | AtExpr;
+            | AtExpr
+            | '#' Number;
 
 AtExpr: '@' AtTuple?;
 AtTuple: '(' Index ',' RHS ')' | '(' Rhs ')';
 DollarSignExpr: '$' NumTuple?;
 NumTuple: '(' Index ',' Index ')' | '(' Index ')';
-SquareExpr: '#' Key;
+SquareExpr: '#' <rest of the input, taken literally>;
 AmpExpr: '&' NumTuple?;
 Pipes: Stars ( '|' Stars )*;
 Stars: Key ( '*' Key )*;
@@ -45,6 +46,17 @@ Number: '1-9' '0-9'+;
 ## Escape sequences
 
 `@`, `$`, `#`, `&`, `[`, `]`, `|`, `.`, `,`, `(`, `)`, `*`, `\` can be escaped using a `\`.
+
+Inside a `#` literal on the left hand side these characters have no special meaning, so they do
+not need escaping. An escape is still honoured there: `#a\.b` and `#a.b` both write `a.b`.
+A `\` before any other character, or at the end, is kept as written: `#C:\Users` writes `C:\Users`.
+
+## Match counts
+
+`[#n]` on the right hand side reads how many matches the spec level `n` steps up has made so far.
+The current leaf is level 0. As in Java JOLT, a level's count goes up after one of its children
+matches, and the infallible `@`, `$` and `#` keys do not count as matches. `#` has no meaning in an
+`@` lookup and is rejected there.
 
 ## Infallible/fallible lhs expressions and execution order
 

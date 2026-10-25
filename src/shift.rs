@@ -15,9 +15,10 @@ pub struct Shift(Object);
 impl Transform for Shift {
     fn apply(&self, val: &Value) -> Result<Value> {
         let mut path = vec![(vec![Cow::Borrowed(ROOT_KEY)], val)];
+        let mut counts = vec![0];
 
         let mut out = Value::Null;
-        apply(&self.0, &mut path, &mut out)?;
+        apply(&self.0, &mut path, &mut counts, &mut out)?;
 
         path.pop().ok_or(Error::ShiftEmptyPath)?;
         // path should always be empty at this point
@@ -32,10 +33,14 @@ impl Transform for Shift {
 
 // Apply an object from spec to the input
 // input is passed using the path and the current input should be
-// at the tip of the path
+// at the tip of the path.
+// `counts` runs parallel to `path` and holds how many children each level has matched so far,
+// which is what `[#n]` reads. As in Java JOLT, a level's count goes up after one of its children
+// matches, and the special `#`, `$` and `@` keys do not count as matches.
 fn apply<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
+    counts: &'ctx mut Vec<usize>,
     out: &'ctx mut Value,
 ) -> Result<()> {
     let tip = path.last().ok_or(Error::ShiftEmptyPath)?.clone();
@@ -51,22 +56,24 @@ fn apply<'ctx, 'input: 'ctx>(
         };
 
         path.push(tip.clone());
+        counts.push(0);
         for rhs in rhs.iter() {
-            insert_val_to_rhs(rhs, v.clone(), path, out)?;
+            insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
         }
+        counts.pop();
         path.pop().ok_or(Error::ShiftEmptyPath)?;
     }
 
     match tip.1 {
         Value::Object(input) => {
             for (k, v) in input.iter() {
-                match_obj_and_key(obj, path, Cow::Borrowed(k), v, out)?;
+                match_obj_and_key(obj, path, counts, Cow::Borrowed(k), v, out)?;
             }
         }
         Value::Bool(b) => {
             let k = if *b { "true" } else { "false" };
 
-            match_obj_and_key(obj, path, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Array(arr) => {
             for (k, v) in arr.iter().enumerate() {
@@ -74,6 +81,7 @@ fn apply<'ctx, 'input: 'ctx>(
                 match_obj_and_key(
                     obj,
                     path,
+                    counts,
                     // this makes the downstream functions to do some extra allocations.
                     // could avoid some of these allocations by mapping some small indexes to static str's
                     Cow::Owned(k),
@@ -85,14 +93,14 @@ fn apply<'ctx, 'input: 'ctx>(
         Value::Number(n) => {
             let k = n.to_string();
 
-            match_obj_and_key(obj, path, Cow::Owned(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, Cow::Owned(k), tip.1, out)?;
         }
         Value::String(k) => {
-            match_obj_and_key(obj, path, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Null => {
             let k = "null";
-            match_obj_and_key(obj, path, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
         }
     };
 
@@ -105,6 +113,7 @@ fn apply<'ctx, 'input: 'ctx>(
 fn match_obj_and_key<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
+    counts: &'ctx mut Vec<usize>,
     k: Cow<'input, str>,
     v: &'input Value,
     out: &'ctx mut Value,
@@ -113,8 +122,9 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         let lit = Cow::Borrowed(lit.as_ref());
         if lit == k {
             path.push((vec![lit], v));
-            apply_match(v, rhs, path, out)?;
-            path.pop().ok_or(Error::ShiftEmptyPath)?;
+            counts.push(0);
+            apply_match(v, rhs, path, counts, out)?;
+            pop_matched_level(path, counts)?;
             return Ok(());
         }
     }
@@ -123,8 +133,9 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         let m = get_match(*amp, path)?;
         if m == k {
             path.push((vec![m], v));
-            apply_match(v, rhs, path, out)?;
-            path.pop().ok_or(Error::ShiftEmptyPath)?;
+            counts.push(0);
+            apply_match(v, rhs, path, counts, out)?;
+            pop_matched_level(path, counts)?;
             return Ok(());
         }
     }
@@ -133,8 +144,9 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         for stars in pipes.iter() {
             if let Some(m) = match_stars(&stars.0, Cow::clone(&k)) {
                 path.push((m, v));
-                apply_match(v, rhs, path, out)?;
-                path.pop().ok_or(Error::ShiftEmptyPath)?;
+                counts.push(0);
+                apply_match(v, rhs, path, counts, out)?;
+                pop_matched_level(path, counts)?;
                 return Ok(());
             }
         }
@@ -143,17 +155,29 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
     Ok(())
 }
 
+// Leave a level that matched, and count the match against its parent.
+fn pop_matched_level(
+    path: &mut Vec<(Vec<Cow<'_, str>>, &Value)>,
+    counts: &mut Vec<usize>,
+) -> Result<()> {
+    path.pop().ok_or(Error::ShiftEmptyPath)?;
+    counts.pop().ok_or(Error::ShiftEmptyPath)?;
+    *counts.last_mut().ok_or(Error::ShiftEmptyPath)? += 1;
+    Ok(())
+}
+
 fn apply_match<'ctx, 'input: 'ctx>(
     v: &'input Value,
     rhs: &'input REntry,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
+    counts: &'ctx mut Vec<usize>,
     out: &'ctx mut Value,
 ) -> Result<()> {
     match rhs {
-        REntry::Obj(object) => apply(object, path, out),
+        REntry::Obj(object) => apply(object, path, counts, out),
         REntry::Rhs(rhs) => {
             for rhs in rhs.iter() {
-                insert_val_to_rhs(rhs, v.clone(), path, out)?;
+                insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
             }
             Ok(())
         }
@@ -203,7 +227,8 @@ fn eval_rhs(rhs: &Rhs, v: &Value, path: &[(Vec<Cow<'_, str>>, &Value)]) -> Resul
                             }
                             v => return Err(Error::InvalidIndexVal(v)),
                         },
-                        IndexOp::Empty => {
+                        // `#` only counts output matches, so it has no meaning in a lookup
+                        IndexOp::Hash(_) | IndexOp::Empty => {
                             return Err(Error::UnexpectedRhsEntry);
                         }
                     };
@@ -279,6 +304,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
     rhs: &Rhs,
     v: Value,
     path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
+    counts: &[usize],
     out: &mut Value,
 ) -> Result<()> {
     let mut out = out;
@@ -316,6 +342,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                         }
                         v => return Err(Error::InvalidIndexVal(v)),
                     },
+                    IndexOp::Hash(level) => get_match_count(*level, counts)?,
                     IndexOp::Empty => {
                         arr.push(Value::Null);
                         out = arr.last_mut().unwrap();
@@ -459,4 +486,90 @@ fn get_match<'ctx, 'input: 'ctx>(
     })?;
 
     Ok(m.clone())
+}
+
+// Read the match count of the spec level `level` steps up from the current leaf
+fn get_match_count(level: usize, counts: &[usize]) -> Result<usize> {
+    if level >= counts.len() {
+        return Err(Error::PathIndexOutOfRange {
+            idx: level,
+            len: counts.len(),
+        });
+    }
+
+    Ok(counts[counts.len() - level - 1])
+}
+
+#[cfg(test)]
+mod test {
+    use serde_json::{json, Value};
+    use super::*;
+
+    fn run(spec: Value, input: Value) -> Result<Value> {
+        let shift: Shift = serde_json::from_value(spec).expect("parsed spec");
+        shift.apply(&input)
+    }
+
+    #[test]
+    fn test_hash_index_on_leaf_counts_matched_siblings() {
+        let output = run(json!({ "*": "out[#1]" }), json!({ "a": 1, "b": 2 })).unwrap();
+
+        assert_eq!(output, json!({ "out": [1, 2] }));
+    }
+
+    #[test]
+    fn test_hash_index_ignores_special_keys() {
+        let output = run(
+            json!({
+                "a": {
+                    "#lit": "o.l",
+                    "@(1,z)": "o.z",
+                    "$": "o.d",
+                    "b": "out[#1]",
+                    "c": "out[#1]"
+                }
+            }),
+            json!({ "a": { "b": 1, "c": 2 }, "z": "zz" }),
+        )
+        .unwrap();
+
+        assert_eq!(output["out"], json!([1, 2]));
+        assert_eq!(output["o"], json!({ "l": "lit", "z": "zz", "d": "a" }));
+    }
+
+    #[test]
+    fn test_hash_index_follows_input_order_and_skips_unmatched() {
+        let output = run(
+            json!({ "x*": { "v": "out[#2]" } }),
+            json!({ "x2": { "v": "two" }, "y": { "v": "skip" }, "x1": { "v": "one" } }),
+        )
+        .unwrap();
+
+        assert_eq!(output, json!({ "out": ["two", "one"] }));
+    }
+
+    #[test]
+    fn test_hash_index_over_input_array() {
+        let output = run(
+            json!({ "items": { "*": { "id": "ids[#2]" } } }),
+            json!({ "items": [{ "id": 10 }, { "id": 20 }, { "id": 30 }] }),
+        )
+        .unwrap();
+
+        assert_eq!(output, json!({ "ids": [10, 20, 30] }));
+    }
+
+    #[test]
+    fn test_hash_index_out_of_range_is_an_error() {
+        let result = run(json!({ "a": "out[#5]" }), json!({ "a": 1 }));
+
+        assert!(matches!(result, Err(Error::PathIndexOutOfRange { idx: 5, .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_hash_index_in_lookup_is_rejected() {
+        let result = run(json!({ "a": { "@(1,arr[#1])": "out" } }), json!({ "a": 1, "arr": [1] }));
+
+        assert!(result.is_err(), "got {:?}", result);
+    }
 }

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
-use crate::{JsonPointer, shift::Shift, modifier::ModifierSpec};
+use crate::{shift::Shift, modifier::ModifierSpec};
 
 /// The JSON transformation specification.
 ///
@@ -144,7 +144,8 @@ use crate::{JsonPointer, shift::Shift, modifier::ModifierSpec};
 /// </pre>
 ///
 /// ### `Default` operation
-/// Applies default values if the value is not present in the input JSON.
+/// Applies default values where a value is missing or `null` in the input JSON. Arrays in the
+/// spec are literal values, so they are written as is.
 ///
 ///  For example, given this simple input JSON:
 ///  <pre>
@@ -179,6 +180,7 @@ use crate::{JsonPointer, shift::Shift, modifier::ModifierSpec};
 /// ### `Remove` operation
 /// Removes content from the input JSON.
 /// The spec structure matches the input JSON structure. The value of fields is ignored.
+/// A `*` in a key matches any run of characters, and keys match array indexes on arrays.
 ///
 ///  For example, given this simple input JSON:
 ///  <pre>
@@ -226,11 +228,6 @@ pub(crate) enum SpecEntry {
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub(crate) struct Spec(Value);
 
-#[derive(Debug)]
-pub(crate) struct SpecIter<'a> {
-    path: Vec<(&'a Value, usize, String)>,
-}
-
 impl TransformSpec {
     pub(crate) fn entries(&self) -> impl Iterator<Item = &SpecEntry> {
         self.0.iter()
@@ -238,46 +235,8 @@ impl TransformSpec {
 }
 
 impl Spec {
-    pub(crate) fn iter(&self) -> SpecIter<'_> {
-        SpecIter::new(self)
-    }
-}
-
-impl<'a> SpecIter<'a> {
-    fn new(spec: &'a Spec) -> Self {
-        Self {
-            path: vec![(&spec.0, 0, String::new())],
-        }
-    }
-}
-
-impl<'a> Iterator for SpecIter<'a> {
-    type Item = (JsonPointer, &'a Value);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (current, index, name) = self.path.pop()?;
-            match current {
-                Value::Array(vec) => {
-                    if let Some(next) = vec.get(index) {
-                        self.path.push((current, index + 1, name));
-                        self.path.push((next, 0, index.to_string()));
-                    }
-                }
-                Value::Object(map) => {
-                    if let Some((next_name, next)) = map.iter().nth(index) {
-                        self.path.push((current, index + 1, name));
-                        self.path.push((next, 0, next_name.clone()));
-                    }
-                }
-                other => {
-                    let mut path: Vec<String> =
-                        self.path.iter().map(|(_, _, path)| path.clone()).collect();
-                    path.push(name);
-                    return Some((JsonPointer::new(path), other));
-                }
-            };
-        }
+    pub(crate) fn value(&self) -> &Value {
+        &self.0
     }
 }
 

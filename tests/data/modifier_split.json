@@ -1,0 +1,19 @@
+{
+  "input": {
+    "name": "Smith^John^Q",
+    "tags": "a,b,c"
+  },
+  "spec": [
+    {
+      "operation": "modify-overwrite-beta",
+      "spec": {
+        "name": "=split('^', @(1,name))",
+        "tags": "=split(',', @(1,tags))"
+      }
+    }
+  ],
+  "expected": {
+    "name": ["Smith", "John", "Q"],
+    "tags": ["a", "b", "c"]
+  }
+}

@@ -45,6 +45,9 @@ pub enum IndexOp {
     Amp(usize, usize),
     Literal(usize),
     At(usize, Box<Rhs>),
+    /// `[#n]`: the number of matches made so far by the spec node `n` levels up, counting the
+    /// current leaf as level 0. Used to turn a map into a dense array.
+    Hash(usize),
     Empty,
 }
 
