@@ -23,6 +23,8 @@ pub enum Error {
     },
     #[error("Array index out of range. Index={idx};Length={len};")]
     ArrIndexOutOfRange { idx: usize, len: usize },
+    #[error("Array index would pad the output with too many null slots. Index={idx};Length={len};Limit={max} padded slots per shift;")]
+    ArrayPaddingLimit { idx: usize, len: usize, max: usize },
     #[error("Json value can't be used as an index: {0:?}")]
     InvalidIndexVal(serde_json::Value),
     #[error("Key not found in object:{0}")]

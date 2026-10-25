@@ -9,6 +9,38 @@ use crate::{Error, Result};
 
 const ROOT_KEY: &str = "root";
 
+// Index expressions such as `[&0]` and `[@(1,idx)]` take their index from the input, and a write
+// to index `i` pads the array with nulls up to `i`. Without a bound, one key like "10000000000"
+// exhausts memory, and many moderate keys add up the same way. So each `shift` run gets a budget of
+// gap slots: writing index `i` into an array of length `len` costs `i - len` when `i > len`, and
+// nothing otherwise. A run may pad at most this many slots in total. Reaching the limit exactly is
+// allowed; one slot more is an error. In-order writes (index == length) are free at any size.
+const MAX_ARRAY_PADDING: usize = 100_000;
+
+// Tracks the null padding spent by one `shift` run. See `MAX_ARRAY_PADDING`.
+#[derive(Debug, Default)]
+struct PaddingBudget {
+    used: usize,
+}
+
+impl PaddingBudget {
+    // Reserve the gap slots needed to write `idx` into an array of length `len`.
+    // Fails without reserving anything when the run would go over the limit.
+    fn reserve(&mut self, idx: usize, len: usize) -> Result<()> {
+        let gap = idx.saturating_sub(len);
+        let used = self.used.saturating_add(gap);
+        if used > MAX_ARRAY_PADDING {
+            return Err(Error::ArrayPaddingLimit {
+                idx,
+                len,
+                max: MAX_ARRAY_PADDING,
+            });
+        }
+        self.used = used;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Shift(Object);
 
@@ -17,8 +49,10 @@ impl Transform for Shift {
         let mut path = vec![(vec![Cow::Borrowed(ROOT_KEY)], val)];
         let mut counts = vec![0];
 
+        let mut budget = PaddingBudget::default();
+
         let mut out = Value::Null;
-        apply(&self.0, &mut path, &mut counts, &mut out)?;
+        apply(&self.0, &mut path, &mut counts, &mut budget, &mut out)?;
 
         path.pop().ok_or(Error::ShiftEmptyPath)?;
         // path should always be empty at this point
@@ -41,6 +75,7 @@ fn apply<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     let tip = path.last().ok_or(Error::ShiftEmptyPath)?.clone();
@@ -58,7 +93,7 @@ fn apply<'ctx, 'input: 'ctx>(
         path.push(tip.clone());
         counts.push(0);
         for rhs in rhs.iter() {
-            insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
+            insert_val_to_rhs(rhs, v.clone(), path, counts, budget, out)?;
         }
         counts.pop();
         path.pop().ok_or(Error::ShiftEmptyPath)?;
@@ -67,13 +102,13 @@ fn apply<'ctx, 'input: 'ctx>(
     match tip.1 {
         Value::Object(input) => {
             for (k, v) in input.iter() {
-                match_obj_and_key(obj, path, counts, Cow::Borrowed(k), v, out)?;
+                match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), v, out)?;
             }
         }
         Value::Bool(b) => {
             let k = if *b { "true" } else { "false" };
 
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Array(arr) => {
             for (k, v) in arr.iter().enumerate() {
@@ -82,6 +117,7 @@ fn apply<'ctx, 'input: 'ctx>(
                     obj,
                     path,
                     counts,
+                    budget,
                     // this makes the downstream functions to do some extra allocations.
                     // could avoid some of these allocations by mapping some small indexes to static str's
                     Cow::Owned(k),
@@ -93,14 +129,14 @@ fn apply<'ctx, 'input: 'ctx>(
         Value::Number(n) => {
             let k = n.to_string();
 
-            match_obj_and_key(obj, path, counts, Cow::Owned(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Owned(k), tip.1, out)?;
         }
         Value::String(k) => {
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
         Value::Null => {
             let k = "null";
-            match_obj_and_key(obj, path, counts, Cow::Borrowed(k), tip.1, out)?;
+            match_obj_and_key(obj, path, counts, budget, Cow::Borrowed(k), tip.1, out)?;
         }
     };
 
@@ -114,6 +150,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     k: Cow<'input, str>,
     v: &'input Value,
     out: &'ctx mut Value,
@@ -123,7 +160,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         if lit == k {
             path.push((vec![lit], v));
             counts.push(0);
-            apply_match(v, rhs, path, counts, out)?;
+            apply_match(v, rhs, path, counts, budget, out)?;
             pop_matched_level(path, counts)?;
             return Ok(());
         }
@@ -134,7 +171,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
         if m == k {
             path.push((vec![m], v));
             counts.push(0);
-            apply_match(v, rhs, path, counts, out)?;
+            apply_match(v, rhs, path, counts, budget, out)?;
             pop_matched_level(path, counts)?;
             return Ok(());
         }
@@ -145,7 +182,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
             if let Some(m) = match_stars(&stars.0, Cow::clone(&k)) {
                 path.push((m, v));
                 counts.push(0);
-                apply_match(v, rhs, path, counts, out)?;
+                apply_match(v, rhs, path, counts, budget, out)?;
                 pop_matched_level(path, counts)?;
                 return Ok(());
             }
@@ -171,13 +208,14 @@ fn apply_match<'ctx, 'input: 'ctx>(
     rhs: &'input REntry,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
+    budget: &mut PaddingBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     match rhs {
-        REntry::Obj(object) => apply(object, path, counts, out),
+        REntry::Obj(object) => apply(object, path, counts, budget, out),
         REntry::Rhs(rhs) => {
             for rhs in rhs.iter() {
-                insert_val_to_rhs(rhs, v.clone(), path, counts, out)?;
+                insert_val_to_rhs(rhs, v.clone(), path, counts, budget, out)?;
             }
             Ok(())
         }
@@ -305,6 +343,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
     v: Value,
     path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
     counts: &[usize],
+    budget: &mut PaddingBudget,
     out: &mut Value,
 ) -> Result<()> {
     let mut out = out;
@@ -350,6 +389,8 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                     }
                 };
 
+                // Charge before pushing, so an index over the budget allocates nothing.
+                budget.reserve(idx, arr.len())?;
                 while arr.len() <= idx {
                     arr.push(Value::Null);
                 }
@@ -571,5 +612,97 @@ mod test {
         let result = run(json!({ "a": { "@(1,arr[#1])": "out" } }), json!({ "a": 1, "arr": [1] }));
 
         assert!(result.is_err(), "got {:?}", result);
+    }
+
+    fn sparse_objects(count: usize, key: &str) -> Value {
+        let mut input = serde_json::Map::new();
+        for i in 0..count {
+            input.insert(format!("o{}", i), json!({ key: i }));
+        }
+        Value::Object(input)
+    }
+
+    #[test]
+    fn test_amp_index_padding_limit_boundary() {
+        let at_limit = MAX_ARRAY_PADDING.to_string();
+        let output = run(json!({ "*": "a[&0]" }), json!({ at_limit: "x" })).unwrap();
+        let arr = output["a"].as_array().unwrap();
+        assert_eq!(arr.len(), MAX_ARRAY_PADDING + 1);
+        assert_eq!(arr[MAX_ARRAY_PADDING], json!("x"));
+
+        let over_limit = (MAX_ARRAY_PADDING + 1).to_string();
+        let result = run(json!({ "*": "a[&0]" }), json!({ over_limit: "x" }));
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx, len: 0, max: MAX_ARRAY_PADDING }) if idx == MAX_ARRAY_PADDING + 1),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_at_index_over_padding_limit_is_an_error() {
+        let spec = json!({ "v": "out[@(1,idx)]" });
+
+        let from_number = run(spec.clone(), json!({ "v": "x", "idx": MAX_ARRAY_PADDING + 1 }));
+        assert!(matches!(from_number, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_number);
+
+        let from_string = run(spec.clone(), json!({ "v": "x", "idx": "200000" }));
+        assert!(matches!(from_string, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_string);
+
+        let output = run(spec, json!({ "v": "x", "idx": 3 })).unwrap();
+        assert_eq!(output, json!({ "out": [null, null, null, "x"] }));
+    }
+
+    #[test]
+    fn test_huge_amp_index_fails_without_allocating() {
+        let result = run(json!({ "*": "a[&0]" }), json!({ "10000000000": "x" }));
+
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx: 10_000_000_000, len: 0, .. })),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_padding_across_many_arrays_is_bounded() {
+        let result = run(json!({ "*": { "*": "&1[&0]" } }), sparse_objects(1_000, "99999"));
+
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_positional_reshaping_costs_no_padding() {
+        let items: Vec<Value> = (0..200_000).map(|i| json!({ "qty": i })).collect();
+        let output = run(
+            json!({ "items": { "*": { "qty": "data.items[&1].qty" } } }),
+            json!({ "items": items }),
+        )
+        .unwrap();
+
+        let out_items = output["data"]["items"].as_array().unwrap();
+        assert_eq!(out_items.len(), 200_000);
+        assert_eq!(out_items[199_999], json!({ "qty": 199_999 }));
+    }
+
+    #[test]
+    fn test_small_sparse_writes_share_one_budget() {
+        let spec = json!({ "*": { "*": "&1[&0]" } });
+
+        // Each object pads 1,000 slots, so 100 objects use the whole budget.
+        let output = run(spec.clone(), sparse_objects(100, "1000")).unwrap();
+        assert_eq!(output["o99"].as_array().unwrap().len(), 1_001);
+
+        let result = run(spec, sparse_objects(101, "1000"));
+        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+    }
+
+    #[test]
+    fn test_padding_budget_resets_for_each_run() {
+        let shift: Shift = serde_json::from_value(json!({ "*": "a[&0]" })).expect("parsed spec");
+        let input = json!({ MAX_ARRAY_PADDING.to_string(): "x" });
+
+        assert!(shift.apply(&input).is_ok());
+        assert!(shift.apply(&input).is_ok());
     }
 }
