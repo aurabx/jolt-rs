@@ -118,6 +118,7 @@ fn evaluate_path_expr(
 
         // Start from root and navigate to the target depth. A failure must not fall back to
         // root, or the shape of the body would decide which object the path reads.
+        budget.charge_path(target_path)?;
         resolve_segments(root, target_path).ok_or_else(|| {
             Error::PathEvaluationError(format!(
                 "Path level {} has no value in the input",

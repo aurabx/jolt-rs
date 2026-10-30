@@ -146,22 +146,21 @@ impl ModifierSpec {
                     *target = Value::Object(Map::new());
                 }
 
-                // Clone spec_map to avoid borrow issues
-                let mut spec_entries: Vec<(String, Value)> = spec_map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-
                 // Literal keys run before the wildcard, as in Java JOLT
-                spec_entries.sort_by_key(|(key, _)| key == "*");
-
-                for (key, value) in spec_entries {
+                let literals = spec_map.iter().filter(|(key, _)| key.as_str() != "*");
+                for (key, value) in literals.chain(spec_map.get_key_value("*")) {
                     // Handle wildcard "*" to iterate over all children
                     if key == "*" {
                         if value.is_object() {
                             // Get keys to iterate over (from target, not spec)
                             let target_keys: Vec<String> = if let Some(obj) = target.as_object() {
-                                obj.keys().cloned().collect()
+                                // A leaf literal owns its key, so the walk leaves that value alone
+                                obj.keys()
+                                    .filter(|key| {
+                                        spec_map.get(key.as_str()).is_none_or(Value::is_object)
+                                    })
+                                    .cloned()
+                                    .collect()
                             } else if let Some(arr) = target.as_array() {
                                 (0..arr.len()).map(|i| i.to_string()).collect()
                             } else {
@@ -171,20 +170,21 @@ impl ModifierSpec {
                             // Apply nested spec to each child
                             for child_key in target_keys {
                                 // Get the child value
-                                let child_target =
-                                    if target.is_array() {
-                                        let idx: usize = child_key.parse().unwrap_or(0);
-                                        target.as_array_mut().unwrap().get_mut(idx).filter(
-                                            |element| Self::fits_array_walk(element, &value),
-                                        )
-                                    } else {
-                                        target.as_object_mut().unwrap().get_mut(&child_key)
-                                    };
+                                let child_target = if target.is_array() {
+                                    let idx: usize = child_key.parse().unwrap_or(0);
+                                    target
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .get_mut(idx)
+                                        .filter(|element| Self::fits_array_walk(element, value))
+                                } else {
+                                    target.as_object_mut().unwrap().get_mut(&child_key)
+                                };
 
                                 if let Some(child) = child_target {
                                     path.push(child_key);
                                     self.apply_spec_to_value(
-                                        child, root, &value, context, path, budget,
+                                        child, root, value, context, path, budget,
                                     )?;
                                     path.pop();
                                 }
@@ -204,7 +204,7 @@ impl ModifierSpec {
                             let function_call = FunctionCall::parse(s)?;
 
                             // A kept value must not fail because its function cannot run
-                            if !self.should_write(target, &key) {
+                            if !self.should_write(target, key) {
                                 continue;
                             }
 
@@ -218,18 +218,18 @@ impl ModifierSpec {
 
                             // Execute the function
                             let result = execute_function(&function_call.name, &evaluated_args)?;
-                            budget.charge_entry(target, &key, &result)?;
+                            budget.charge_entry(target, key, &result)?;
 
                             let target_map = target.as_object_mut().unwrap();
                             target_map.insert(key.clone(), result);
                         }
                         Value::Object(_) => {
                             // Nested spec, recurse
-                            if target.get(&key).is_none() {
-                                if Self::is_wildcard_only(&value) {
+                            if target.get(key).is_none() {
+                                if Self::is_wildcard_only(value) {
                                     continue;
                                 }
-                                budget.charge_entry(target, &key, &Value::Object(Map::new()))?;
+                                budget.charge_entry(target, key, &Value::Object(Map::new()))?;
                             }
 
                             // Get or create the nested value
@@ -242,7 +242,7 @@ impl ModifierSpec {
                             self.apply_spec_to_value(
                                 nested_target,
                                 root,
-                                &value,
+                                value,
                                 context,
                                 path,
                                 budget,
@@ -251,8 +251,8 @@ impl ModifierSpec {
                         }
                         _ => {
                             // Regular value, just copy it
-                            if self.should_write(target, &key) {
-                                budget.charge_entry(target, &key, &value)?;
+                            if self.should_write(target, key) {
+                                budget.charge_entry(target, key, value)?;
                                 let target_map = target.as_object_mut().unwrap();
                                 target_map.insert(key.clone(), value.clone());
                             }
@@ -359,6 +359,48 @@ mod tests {
         let elements = MAX_RUN_BYTES / 1_000;
         let input = json!({ "items": vec![json!({}); elements] });
         let spec = json!({ "items": { "*": { "m": { "n": { "o": {} } } } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_long_keys_on_the_path() {
+        let key = "k".repeat(1024 * 1024);
+        let elements = (MAX_RUN_BYTES / key.len()) + 1;
+        let input =
+            json!({ "items": { key: { "v": "1", "list": vec![json!({"a": 1}); elements] } } });
+        let spec = json!({ "items": { "*": { "list": { "*": { "x": "=concat(@(3,v))" } } } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_context_arguments() {
+        let input = json!({ "context": { "k": "x".repeat(MAX_RUN_BYTES) } });
+        let spec = json!({ "y": "=substring(^k,0,1)" });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_identifier_arguments() {
+        let input = json!({ "date": "x".repeat(MAX_RUN_BYTES) });
+        let spec = json!({ "y": "=substring(date,0,1)" });
 
         let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
 

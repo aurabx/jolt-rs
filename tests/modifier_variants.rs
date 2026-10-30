@@ -345,20 +345,11 @@ fn wildcard_only_spec_leaves_nested_nulls_alone() {
 
 #[test]
 fn spec_with_a_literal_key_still_creates_its_parent() {
-    let spec = json!({"a": {"*": {"x": "star"}, "b": "lit"}});
-
     assert_all(
-        &[DEFAULT, DEFINE],
+        &ALL_NAMES,
         json!({}),
-        spec.clone(),
+        json!({"a": {"*": {"x": "star"}, "b": "lit"}}),
         json!({"a": {"b": "lit"}}),
-    );
-    // The wildcard runs last and overwrite replaces a scalar member, so it replaces `lit` too
-    assert_all(
-        &OVERWRITE_NAMES,
-        json!({}),
-        spec,
-        json!({"a": {"b": {"x": "star"}}}),
     );
 }
 
@@ -378,6 +369,75 @@ fn literal_key_runs_before_the_wildcard() {
         input,
         spec,
         json!({"a": {"b": {"x": "lit"}, "c": {"x": "star"}}}),
+    );
+}
+
+#[test]
+fn literal_key_listed_first_also_runs_before_the_wildcard() {
+    assert_all(
+        &[DEFAULT, DEFINE],
+        json!({"a": {"b": {}}}),
+        json!({"a": {"b": {"x": "lit"}, "*": {"x": "star"}}}),
+        json!({"a": {"b": {"x": "lit"}}}),
+    );
+}
+
+#[test]
+fn wildcard_and_literal_with_different_leaves_both_apply() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"a": {"b": {}}}),
+        json!({"a": {"*": {"y": "star"}, "b": {"x": "lit"}}}),
+        json!({"a": {"b": {"x": "lit", "y": "star"}}}),
+    );
+}
+
+#[test]
+fn wildcard_does_not_enter_a_leaf_literal_key() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"a": {"b": {"v": "V"}}}),
+        json!({"a": {"*": {"l": "=toLower(@(1,v))"}, "c": "new"}}),
+        json!({"a": {"b": {"v": "V", "l": "v"}, "c": "new"}}),
+    );
+}
+
+#[test]
+fn overwrite_wildcard_still_replaces_a_scalar_from_the_input() {
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"a": {"p": "s"}}),
+        json!({"a": {"*": {"x": "new"}}}),
+        json!({"a": {"p": {"x": "new"}}}),
+    );
+}
+
+#[test]
+fn wildcard_only_spec_leaves_root_null_and_scalar_alone() {
+    for input in [json!(null), json!("text")] {
+        assert_all(&ALL_NAMES, input.clone(), json!({"*": {"x": "new"}}), input);
+    }
+}
+
+#[test]
+fn path_reference_is_correct_after_a_child_returns_early() {
+    for skipped in [json!({"b": "x"}), json!({"*": {"b": "x"}})] {
+        assert_all(
+            &[DEFAULT, DEFINE],
+            json!({"items": [{"a": "keep", "v": "V"}]}),
+            json!({"items": {"*": {"a": skipped, "s": {"y": "=concat(@(2,v))"}}}}),
+            json!({"items": [{"a": "keep", "v": "V", "s": {"y": "V"}}]}),
+        );
+    }
+}
+
+#[test]
+fn kept_value_skips_a_path_that_would_fail() {
+    assert_all(
+        &[DEFAULT, DEFINE],
+        json!({"a": {"name": "old"}}),
+        json!({"a": {"name": "=concat(@(9,name))"}}),
+        json!({"a": {"name": "old"}}),
     );
 }
 

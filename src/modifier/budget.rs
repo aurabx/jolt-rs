@@ -27,6 +27,15 @@ impl RunBudget {
         self.charge(estimated_size(value))
     }
 
+    /// Charge walking `segments` from the root. Each lookup hashes and compares the whole key,
+    /// and the keys can be long body keys.
+    pub(super) fn charge_path(&mut self, segments: &[String]) -> Result<()> {
+        let bytes = segments
+            .iter()
+            .fold(0, |sum: usize, segment| sum.saturating_add(segment.len()));
+        self.charge(bytes)
+    }
+
     /// Charge writing `value` to `key` of the object `target`
     pub(super) fn charge_entry(&mut self, target: &Value, key: &str, value: &Value) -> Result<()> {
         let allocation = match target.as_object() {
@@ -77,6 +86,16 @@ fn estimated_size(value: &Value) -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_path_cost_is_the_sum_of_its_key_lengths() {
+        let mut budget = RunBudget::default();
+        budget
+            .charge_path(&["abc".to_string(), "de".to_string()])
+            .unwrap();
+
+        assert_eq!(budget.used, 5);
+    }
 
     #[test]
     fn test_first_entry_pays_for_the_map() {

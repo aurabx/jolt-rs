@@ -424,11 +424,11 @@ A function does not run for a value that is kept, so a missing path there is not
 
 Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block for a literal key, and honours `[n]`.
 
-A spec that holds only `*` walks what exists. It never creates a parent or replaces a value. Literal keys run before `*`, so under overwrite the `*` wins on a key that both match.
+A spec that holds only `*` walks what exists. It never creates a parent or replaces a value. Literal keys run before `*`, so spec order does not matter. Under overwrite, `*` replaces a leaf it shares with a literal object key. `*` does not walk a key that the same block gives a leaf value.
 
 A path that cannot be resolved is an error under every variant. That includes `@(n,...)` when the level `n` does not exist in the input.
 
-One modifier run may copy or write about 64 MiB, estimated across function arguments, function results and written values. Going over is a `ModifierBudgetLimit` error. The limit applies to each modifier operation in a spec separately.
+One modifier run may copy or write about 64 MiB, estimated across function arguments, function results, written values and path lookups. Going over is a `ModifierBudgetLimit` error. The limit applies to each modifier operation in a spec separately.
 
 ### `Remove` operation
 Removes content from the input JSON.
