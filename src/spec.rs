@@ -109,6 +109,9 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 /// </pre>
 ///
 ///
+/// On the right hand side, `[#n]` uses a match count as an array index. It counts how many
+/// matches the spec level `n` steps up has made so far, where the current leaf is level 0.
+///
 /// `&` wildcard also allows to dereference any level of the path of given node:
 /// <pre>
 /// {
@@ -118,7 +121,6 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 ///             }
 ///         }
 ///     }
-/// }
 /// </pre>
 /// for the input:
 /// <pre>
@@ -151,7 +153,7 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 ///  <pre>
 /// {
 ///     "phones": {
-///         "mobile": 01234567,
+///         "mobile": "01234567",
 ///         "country": "US"
 ///     }
 /// }
@@ -160,7 +162,7 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 /// <pre>
 /// {
 ///     "phones": {
-///         "mobile": 0000000,
+///         "mobile": "0000000",
 ///         "code": "+1"
 ///     }
 /// }
@@ -169,13 +171,32 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 /// <pre>
 /// {
 ///     "phones": {
-///         "mobile": 01234567,
+///         "mobile": "01234567",
 ///         "country": "US",
 ///         "code": "+1"
 ///     }
 /// }
 /// </pre>
 /// As you can see, the field `mobile` remains not affected while the `code` has a default '+1' value.
+///
+/// ### `Modify` operation
+/// Sets values using functions: `concat`, `toLower`, `toUpper`, `substring`, `trim`, `join` and
+/// `split`. The operation can be named `modify`, `modify-overwrite-beta`, `modify-default-beta`
+/// or `modify-define-beta`.
+///
+/// For example, given this input JSON:
+/// <pre>
+/// {
+///     "first": "John",
+///     "last": "Doe"
+/// }
+/// </pre>
+/// this specification adds a `name` field:
+/// <pre>
+/// {
+///     "name": "=concat(@(1,first),' ',@(1,last))"
+/// }
+/// </pre>
 ///
 /// ### `Remove` operation
 /// Removes content from the input JSON.
@@ -186,7 +207,7 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 ///  <pre>
 /// {
 ///     "phones": {
-///         "mobile": 01234567,
+///         "mobile": "01234567",
 ///         "country": "US"
 ///     }
 /// }
@@ -203,7 +224,7 @@ use crate::{shift::Shift, modifier::ModifierSpec};
 /// <pre>
 /// {
 ///     "phones": {
-///         "mobile": 01234567
+///         "mobile": "01234567"
 ///     }
 /// }
 /// </pre>

@@ -24,7 +24,7 @@ IndexOp: AmpExpr
             | '#' Number;
 
 AtExpr: '@' AtTuple?;
-AtTuple: '(' Index ',' RHS ')' | '(' Rhs ')';
+AtTuple: '(' Index ',' Rhs ')' | '(' Rhs ')';
 DollarSignExpr: '$' NumTuple?;
 NumTuple: '(' Index ',' Index ')' | '(' Index ')';
 SquareExpr: '#' <rest of the input, taken literally>;
@@ -33,7 +33,7 @@ Pipes: Stars ( '|' Stars )*;
 Stars: Key ( '*' Key )*;
 
 Key: <any string of characters>
-Number: '1-9' '0-9'+;
+Number: '0-9'+;
 ```
 
 ## Syntactic sugar
@@ -64,7 +64,9 @@ matches, and the infallible `@`, `$` and `#` keys do not count as matches. `#` h
 
 First the infallible expressions are executed and they are executed once.
 
-Keys are executed in the order they are specified in the spec.
+Fallible keys run in a fixed order, whatever their order in the spec: literal keys, then `&` keys,
+then `*` and `|` keys. Within each group, keys run in spec order. The first match wins, so each
+input key is shifted at most once.
 
 So if the spec is:
 ```json
@@ -90,6 +92,5 @@ When accessing a value from the input:
 When outputting a value to the output:
 - If a key is not found in the object, it is initialized to an empty object.
 - If an index is out of range when accessing an array, the array is extended using null values.
-- If some value already exists in the target, the execution errors out.
-- The rhs expression has to specify that the output is an array in order to push to an array like `my.path[]`.
-Otherwise the execution will error.
+- If a value already exists in the target, the values are collected into an array.
+- `my.path[]` always writes an array, even for a single value.

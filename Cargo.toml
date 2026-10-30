@@ -4,7 +4,7 @@ version = "0.8.0"
 edition = "2021"
 authors = ["Aurabox <hello@aurabox.cloud>"]
 description = "JSON to JSON transformation library using the JOLT spec"
-repository = "https://github.com/aurabx/harmony-jolt"
+repository = "https://github.com/aurabx/jolt-rs"
 license = "Apache-2.0"
 
 [lib]
