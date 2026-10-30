@@ -413,8 +413,22 @@ This produces `{"date": "20250605", "formatted": "2025-06-05"}` by:
 
 #### Modifier Variants
 - **`modify-overwrite-beta`**: Always writes the result, overwriting existing values
-- **`modify-default-beta`**: Only writes if the key doesn't exist
-- **`modify-define-beta`**: Only writes if the key doesn't exist or is null
+- **`modify-default-beta`**: Only writes if the key doesn't exist or its value is null
+- **`modify-define-beta`**: Only writes if the key doesn't exist
+
+`modify` is another name for `modify-overwrite-beta`. These rules match Java JOLT.
+
+A nested spec needs an object, or an array when it uses the `*` wildcard. When an object member has another type, overwrite replaces it with a new object. Default replaces only a `null`. Define keeps the value. A `*` walk over an array skips scalar elements under every variant.
+
+A function does not run for a value that is kept, so a missing path there is not an error. A malformed function string can still be rejected.
+
+Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block for a literal key, and honours `[n]`.
+
+A spec that holds only `*` walks what exists. It never creates a parent or replaces a value. Literal keys run before `*`, so spec order does not matter. Under overwrite, `*` replaces a leaf it shares with a literal object key. `*` does not enter a scalar under a key that the same block gives a leaf value.
+
+A path that cannot be resolved is an error under every variant. That includes `@(n,...)` when the level `n` does not exist in the input.
+
+One modifier run may copy or write about 64 MiB, estimated across function arguments, function results, written values and path lookups. Going over is a `ModifierBudgetLimit` error. The limit applies to each modifier operation in a spec separately.
 
 ### `Remove` operation
 Removes content from the input JSON.

@@ -3,15 +3,20 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use super::function_parser::FunctionCall;
 use super::functions::execute_function;
+use super::budget::RunBudget;
 use super::evaluator::evaluate_arg;
 
 /// Modifier operation variant
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+///
+/// The write rules match Java JOLT's `OpMode`.
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum ModifierVariant {
+    /// Always writes.
     OverwriteBeta,
+    /// Writes when the key is absent or its value is null.
     DefaultBeta,
+    /// Writes only when the key is absent.
     DefineBeta,
 }
 
@@ -28,6 +33,30 @@ impl ModifierSpec {
         Self { variant, spec }
     }
 
+    /// Deserialize the spec of a `modify-default-beta` operation
+    pub fn deserialize_default_beta<'de, D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let spec = Value::deserialize(deserializer)?;
+        Ok(Self {
+            variant: ModifierVariant::DefaultBeta,
+            spec,
+        })
+    }
+
+    /// Deserialize the spec of a `modify-define-beta` operation
+    pub fn deserialize_define_beta<'de, D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let spec = Value::deserialize(deserializer)?;
+        Ok(Self {
+            variant: ModifierVariant::DefineBeta,
+            spec,
+        })
+    }
+
     /// Apply the modifier transformation to the input
     pub fn apply(&self, mut input: Value) -> Result<Value> {
         // Get context if present
@@ -37,9 +66,58 @@ impl ModifierSpec {
         let root = input.clone();
 
         // Apply the spec recursively
-        self.apply_spec_to_value(&mut input, &root, &self.spec, context.as_ref(), &[])?;
+        let mut budget = RunBudget::default();
+        self.apply_spec_to_value(
+            &mut input,
+            &root,
+            &self.spec,
+            context.as_ref(),
+            &mut Vec::new(),
+            &mut budget,
+        )?;
 
         Ok(input)
+    }
+
+    /// Whether this variant may write to `key` of the object `target`
+    fn should_write(&self, target: &Value, key: &str) -> bool {
+        match self.variant {
+            ModifierVariant::OverwriteBeta => true,
+            ModifierVariant::DefaultBeta => matches!(target.get(key), None | Some(Value::Null)),
+            ModifierVariant::DefineBeta => target.get(key).is_none(),
+        }
+    }
+
+    /// Whether this variant may replace a non-object value with a new object.
+    ///
+    /// Java JOLT skips any non-null value that does not fit the spec. Overwrite still replaces
+    /// it on object members, which is this crate's established behaviour. Array elements are
+    /// filtered first by `fits_array_walk`.
+    fn should_replace_with_object(&self, target: &Value) -> bool {
+        match self.variant {
+            ModifierVariant::OverwriteBeta => true,
+            ModifierVariant::DefaultBeta => target.is_null(),
+            ModifierVariant::DefineBeta => false,
+        }
+    }
+
+    /// Whether a wildcard walk over an array should enter `element` with `spec`.
+    ///
+    /// Scalars do not fit an object spec, so a walk skips them under every variant, as Java
+    /// JOLT does. A nested array fits only a spec that can walk it.
+    fn fits_array_walk(element: &Value, spec: &Value) -> bool {
+        match element {
+            Value::Null | Value::Object(_) => true,
+            Value::Array(_) => spec.get("*").is_some(),
+            _ => false,
+        }
+    }
+
+    /// Whether `spec` holds only a `*`. Such a spec has no literal key to write, so like Java
+    /// JOLT's `DataType.RUNTIME` it walks what exists and never creates or replaces a value.
+    fn is_wildcard_only(spec: &Value) -> bool {
+        spec.as_object()
+            .is_some_and(|map| map.len() == 1 && map.contains_key("*"))
     }
 
     fn apply_spec_to_value(
@@ -48,28 +126,44 @@ impl ModifierSpec {
         root: &Value,
         spec: &Value,
         context: Option<&Value>,
-        path: &[String],
+        // One shared stack, because copying it per element costs key length times element count
+        path: &mut Vec<String>,
+        budget: &mut RunBudget,
     ) -> Result<()> {
         match spec {
             Value::Object(spec_map) => {
-                // Ensure target is an object
-                if !target.is_object() {
+                if Self::is_wildcard_only(spec) && !target.is_object() && !target.is_array() {
+                    return Ok(());
+                }
+
+                // A wildcard walks an array in place. Anything else needs an object.
+                let walks_array = target.is_array() && spec_map.contains_key("*");
+                if !target.is_object() && !walks_array {
+                    if !self.should_replace_with_object(target) {
+                        return Ok(());
+                    }
+                    budget.charge_value(&Value::Object(Map::new()))?;
                     *target = Value::Object(Map::new());
                 }
 
-                // Clone spec_map to avoid borrow issues
-                let spec_entries: Vec<(String, Value)> = spec_map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-
-                for (key, value) in spec_entries {
+                // Literal keys run before the wildcard, as in Java JOLT
+                let literals = spec_map.iter().filter(|(key, _)| key.as_str() != "*");
+                for (key, value) in literals.chain(spec_map.get_key_value("*")) {
                     // Handle wildcard "*" to iterate over all children
                     if key == "*" {
-                        if let Value::Object(nested_spec) = &value {
+                        if value.is_object() {
                             // Get keys to iterate over (from target, not spec)
                             let target_keys: Vec<String> = if let Some(obj) = target.as_object() {
-                                obj.keys().cloned().collect()
+                                // A scalar under a leaf literal key belongs to that literal
+                                obj.iter()
+                                    .filter(|(key, member)| {
+                                        member.is_object()
+                                            || !spec_map
+                                                .get(key.as_str())
+                                                .is_some_and(|literal| !literal.is_object())
+                                    })
+                                    .map(|(key, _)| key.clone())
+                                    .collect()
                             } else if let Some(arr) = target.as_array() {
                                 (0..arr.len()).map(|i| i.to_string()).collect()
                             } else {
@@ -78,28 +172,32 @@ impl ModifierSpec {
 
                             // Apply nested spec to each child
                             for child_key in target_keys {
-                                let mut new_path = path.to_vec();
-                                new_path.push(child_key.clone());
-
                                 // Get the child value
                                 let child_target = if target.is_array() {
                                     let idx: usize = child_key.parse().unwrap_or(0);
-                                    target.as_array_mut().unwrap().get_mut(idx)
+                                    target
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .get_mut(idx)
+                                        .filter(|element| Self::fits_array_walk(element, value))
                                 } else {
                                     target.as_object_mut().unwrap().get_mut(&child_key)
                                 };
 
                                 if let Some(child) = child_target {
+                                    path.push(child_key);
                                     self.apply_spec_to_value(
-                                        child,
-                                        root,
-                                        &Value::Object(nested_spec.clone()),
-                                        context,
-                                        &new_path,
+                                        child, root, value, context, path, budget,
                                     )?;
+                                    path.pop();
                                 }
                             }
                         }
+                        continue;
+                    }
+
+                    // Literal keys address object members. Array index keys are not supported.
+                    if target.is_array() {
                         continue;
                     }
 
@@ -108,46 +206,34 @@ impl ModifierSpec {
                             // This is a function call
                             let function_call = FunctionCall::parse(s)?;
 
-                            // Clone target for evaluation to avoid borrow issues
-                            let target_clone = target.clone();
+                            // A kept value must not fail because its function cannot run
+                            if !self.should_write(target, key) {
+                                continue;
+                            }
 
                             // Evaluate all arguments
                             let mut evaluated_args = Vec::new();
                             for arg in &function_call.args {
                                 let evaluated =
-                                    evaluate_arg(arg, &target_clone, root, context, path)?;
+                                    evaluate_arg(arg, target, root, context, path, budget)?;
                                 evaluated_args.push(evaluated);
                             }
 
                             // Execute the function
                             let result = execute_function(&function_call.name, &evaluated_args)?;
+                            budget.charge_entry(target, key, &result)?;
 
-                            // Get mutable reference to target_map after evaluation
                             let target_map = target.as_object_mut().unwrap();
-
-                            // Apply based on variant
-                            match self.variant {
-                                ModifierVariant::OverwriteBeta => {
-                                    // Always write
-                                    target_map.insert(key.clone(), result);
-                                }
-                                ModifierVariant::DefaultBeta => {
-                                    // Only write if key doesn't exist
-                                    target_map.entry(key.clone()).or_insert(result);
-                                }
-                                ModifierVariant::DefineBeta => {
-                                    // Only write if key doesn't exist or is null
-                                    if !target_map.contains_key(&key) || target_map[&key].is_null()
-                                    {
-                                        target_map.insert(key.clone(), result);
-                                    }
-                                }
-                            }
+                            target_map.insert(key.clone(), result);
                         }
                         Value::Object(_) => {
                             // Nested spec, recurse
-                            let mut new_path = path.to_vec();
-                            new_path.push(key.clone());
+                            if target.get(key).is_none() {
+                                if Self::is_wildcard_only(value) {
+                                    continue;
+                                }
+                                budget.charge_entry(target, key, &Value::Object(Map::new()))?;
+                            }
 
                             // Get or create the nested value
                             let target_map = target.as_object_mut().unwrap();
@@ -155,30 +241,23 @@ impl ModifierSpec {
                                 .entry(key.clone())
                                 .or_insert(Value::Object(Map::new()));
 
+                            path.push(key.clone());
                             self.apply_spec_to_value(
                                 nested_target,
                                 root,
-                                &value,
+                                value,
                                 context,
-                                &new_path,
+                                path,
+                                budget,
                             )?;
+                            path.pop();
                         }
                         _ => {
                             // Regular value, just copy it
-                            let target_map = target.as_object_mut().unwrap();
-                            match self.variant {
-                                ModifierVariant::OverwriteBeta => {
-                                    target_map.insert(key.clone(), value.clone());
-                                }
-                                ModifierVariant::DefaultBeta => {
-                                    target_map.entry(key.clone()).or_insert(value.clone());
-                                }
-                                ModifierVariant::DefineBeta => {
-                                    if !target_map.contains_key(&key) || target_map[&key].is_null()
-                                    {
-                                        target_map.insert(key.clone(), value.clone());
-                                    }
-                                }
+                            if self.should_write(target, key) {
+                                budget.charge_entry(target, key, value)?;
+                                let target_map = target.as_object_mut().unwrap();
+                                target_map.insert(key.clone(), value.clone());
                             }
                         }
                     }
@@ -197,7 +276,8 @@ impl ModifierSpec {
     }
 }
 
-// Deserialization support for ModifierSpec
+// `modify` and `modify-overwrite-beta` deserialize here. The other names have their own
+// functions, because the variant comes from the operation name, not from the spec body.
 impl<'de> Deserialize<'de> for ModifierSpec {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -205,7 +285,7 @@ impl<'de> Deserialize<'de> for ModifierSpec {
     {
         let value = Value::deserialize(deserializer)?;
         Ok(ModifierSpec {
-            variant: ModifierVariant::OverwriteBeta, // Default variant
+            variant: ModifierVariant::OverwriteBeta,
             spec: value,
         })
     }
@@ -214,7 +294,144 @@ impl<'de> Deserialize<'de> for ModifierSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::budget::MAX_RUN_BYTES;
     use serde_json::json;
+
+    #[test]
+    fn test_budget_stops_wildcard_amplification() {
+        let elements = (MAX_RUN_BYTES / 50_000) + 1;
+        let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(
+                result,
+                Err(Error::ModifierBudgetLimit {
+                    max: MAX_RUN_BYTES,
+                    ..
+                })
+            ),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_allows_output_under_the_limit() {
+        let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); 100] });
+        let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec)
+            .apply(input)
+            .unwrap();
+
+        assert_eq!(result["items"][99]["x"].as_str().unwrap().len(), 50_000);
+    }
+
+    #[test]
+    fn test_budget_charges_arguments_when_the_result_is_small() {
+        let elements = (MAX_RUN_BYTES / 500_000) + 1;
+        let input = json!({ "date": "x".repeat(500_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "y": "=substring(@(3,date),0,4)" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_nested_function_arguments() {
+        let elements = (MAX_RUN_BYTES / 500_000) + 1;
+        let input = json!({ "date": "x".repeat(500_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "y": "=substring(=trim(@(3,date)),0,4)" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_created_parent_objects() {
+        let elements = MAX_RUN_BYTES / 1_000;
+        let input = json!({ "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "m": { "n": { "o": {} } } } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_long_keys_on_the_path() {
+        let key = "k".repeat(1024 * 1024);
+        let elements = (MAX_RUN_BYTES / key.len()) + 1;
+        let input =
+            json!({ "items": { key: { "v": "1", "list": vec![json!({"a": 1}); elements] } } });
+        let spec = json!({ "items": { "*": { "list": { "*": { "x": "=concat(@(3,v))" } } } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_context_arguments() {
+        let input = json!({ "context": { "k": "x".repeat(MAX_RUN_BYTES) } });
+        let spec = json!({ "y": "=substring(^k,0,1)" });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_identifier_arguments() {
+        let input = json!({ "date": "x".repeat(MAX_RUN_BYTES) });
+        let spec = json!({ "y": "=substring(date,0,1)" });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_kept_value_is_not_charged() {
+        let mut budget = RunBudget::default();
+        let modifier = ModifierSpec::new(ModifierVariant::DefineBeta, json!({ "a": "new" }));
+        let mut target = json!({ "a": "old" });
+
+        modifier
+            .apply_spec_to_value(
+                &mut target,
+                &json!({}),
+                &modifier.spec,
+                None,
+                &mut Vec::new(),
+                &mut budget,
+            )
+            .unwrap();
+
+        assert_eq!(budget.used, 0);
+    }
 
     #[test]
     fn test_simple_concat() {
