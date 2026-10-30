@@ -321,6 +321,107 @@ fn path_reference_is_correct_after_visiting_a_sibling() {
 }
 
 #[test]
+fn wildcard_only_spec_leaves_null_absent_and_scalar_values_alone() {
+    let spec = json!({"a": {"*": {"x": "new"}}});
+    for input in [json!({"a": null}), json!({}), json!({"a": "old"})] {
+        assert_all(&ALL_NAMES, input.clone(), spec.clone(), input);
+    }
+}
+
+#[test]
+fn wildcard_only_spec_leaves_nested_nulls_alone() {
+    let spec = json!({"a": {"*": {"b": {"*": {"x": "new"}}}}});
+    let input = json!({"a": [null, {"b": null}]});
+
+    // The element spec has the literal key `b`, so a null element follows the write rule
+    assert_all(
+        &[OVERWRITE_NAMES[0], OVERWRITE_NAMES[1], DEFAULT],
+        input.clone(),
+        spec.clone(),
+        json!({"a": [{}, {"b": null}]}),
+    );
+    assert_all(&[DEFINE], input.clone(), spec, input);
+}
+
+#[test]
+fn spec_with_a_literal_key_still_creates_its_parent() {
+    let spec = json!({"a": {"*": {"x": "star"}, "b": "lit"}});
+
+    assert_all(
+        &[DEFAULT, DEFINE],
+        json!({}),
+        spec.clone(),
+        json!({"a": {"b": "lit"}}),
+    );
+    // The wildcard runs last and overwrite replaces a scalar member, so it replaces `lit` too
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({}),
+        spec,
+        json!({"a": {"b": {"x": "star"}}}),
+    );
+}
+
+#[test]
+fn literal_key_runs_before_the_wildcard() {
+    let spec = json!({"a": {"*": {"x": "star"}, "b": {"x": "lit"}}});
+    let input = json!({"a": {"b": {}, "c": {}}});
+
+    assert_all(
+        &OVERWRITE_NAMES,
+        input.clone(),
+        spec.clone(),
+        json!({"a": {"b": {"x": "star"}, "c": {"x": "star"}}}),
+    );
+    assert_all(
+        &[DEFAULT, DEFINE],
+        input,
+        spec,
+        json!({"a": {"b": {"x": "lit"}, "c": {"x": "star"}}}),
+    );
+}
+
+#[test]
+fn ancestor_missing_from_the_input_is_an_error_not_a_read_from_root() {
+    let spec = json!({"new": {"sub": {"x": "=concat(@(2,name))"}}});
+    for operation in ALL_NAMES {
+        let result = transform(json!({"name": "root"}), &parse(operation, spec.clone()));
+        assert!(
+            matches!(result, Err(Error::PathEvaluationError(_))),
+            "operation `{operation}` got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn element_cannot_redirect_an_ancestor_path_to_the_root() {
+    let spec = json!({"items": {"*": {"meta": {"tag": {"v": "=concat(@(2,code))"}}}}});
+    let input = json!({"code": "ROOT", "items": [{"x": 1}]});
+
+    for operation in ALL_NAMES {
+        let result = transform(input.clone(), &parse(operation, spec.clone()));
+        assert!(
+            matches!(result, Err(Error::PathEvaluationError(_))),
+            "operation `{operation}` got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn path_level_above_the_root_is_an_error() {
+    for operation in ALL_NAMES {
+        let result = transform(
+            json!({"name": "root"}),
+            &parse(operation, json!({"x": "=concat(@(5,name))"})),
+        );
+        assert!(
+            matches!(result, Err(Error::PathEvaluationError(_))),
+            "operation `{operation}` got {result:?}"
+        );
+    }
+}
+
+#[test]
 fn kept_value_does_not_run_its_function() {
     let spec = json!({"a": "=concat(@(1,missing))"});
     assert_all(

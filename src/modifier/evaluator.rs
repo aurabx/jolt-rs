@@ -104,8 +104,10 @@ fn evaluate_path_expr(
         // @(1,...) means reference from current object
         current
     } else if path_expr.level > path_stack.len() + 1 {
-        // If level is greater than path depth + 1, use root
-        root
+        return Err(Error::PathEvaluationError(format!(
+            "Path level {} is above the root",
+            path_expr.level
+        )));
     } else {
         // Navigate to the appropriate level by going up from current position
         // path_stack represents where we are in the spec hierarchy
@@ -114,8 +116,14 @@ fn evaluate_path_expr(
         let target_depth = path_stack.len().saturating_sub(levels_up);
         let target_path = &path_stack[..target_depth];
 
-        // Start from root and navigate to the target depth, falling back to root if that fails
-        resolve_segments(root, target_path).unwrap_or(root)
+        // Start from root and navigate to the target depth. A failure must not fall back to
+        // root, or the shape of the body would decide which object the path reads.
+        resolve_segments(root, target_path).ok_or_else(|| {
+            Error::PathEvaluationError(format!(
+                "Path level {} has no value in the input",
+                path_expr.level
+            ))
+        })?
     };
 
     // Navigate the path

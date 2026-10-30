@@ -113,6 +113,13 @@ impl ModifierSpec {
         }
     }
 
+    /// Whether `spec` holds only a `*`. Such a spec has no literal key to write, so like Java
+    /// JOLT's `DataType.RUNTIME` it walks what exists and never creates or replaces a value.
+    fn is_wildcard_only(spec: &Value) -> bool {
+        spec.as_object()
+            .is_some_and(|map| map.len() == 1 && map.contains_key("*"))
+    }
+
     fn apply_spec_to_value(
         &self,
         target: &mut Value,
@@ -125,6 +132,10 @@ impl ModifierSpec {
     ) -> Result<()> {
         match spec {
             Value::Object(spec_map) => {
+                if Self::is_wildcard_only(spec) && !target.is_object() && !target.is_array() {
+                    return Ok(());
+                }
+
                 // A wildcard walks an array in place. Anything else needs an object.
                 let walks_array = target.is_array() && spec_map.contains_key("*");
                 if !target.is_object() && !walks_array {
@@ -136,10 +147,13 @@ impl ModifierSpec {
                 }
 
                 // Clone spec_map to avoid borrow issues
-                let spec_entries: Vec<(String, Value)> = spec_map
+                let mut spec_entries: Vec<(String, Value)> = spec_map
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+
+                // Literal keys run before the wildcard, as in Java JOLT
+                spec_entries.sort_by_key(|(key, _)| key == "*");
 
                 for (key, value) in spec_entries {
                     // Handle wildcard "*" to iterate over all children
@@ -212,6 +226,9 @@ impl ModifierSpec {
                         Value::Object(_) => {
                             // Nested spec, recurse
                             if target.get(&key).is_none() {
+                                if Self::is_wildcard_only(&value) {
+                                    continue;
+                                }
                                 budget.charge_entry(target, &key, &Value::Object(Map::new()))?;
                             }
 
