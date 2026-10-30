@@ -30,6 +30,10 @@ pub enum Error {
         used: usize,
         max: usize,
     },
+    #[error(
+        "Modifier output is too large. Used={used};Limit={max} estimated bytes per modifier run;"
+    )]
+    ModifierOutputLimit { used: usize, max: usize },
     #[error("Array index string is too long. Length={len};Max={max};")]
     IndexTooLong { len: usize, max: usize },
     #[error("Json value can't be used as an index: {0:?}")]

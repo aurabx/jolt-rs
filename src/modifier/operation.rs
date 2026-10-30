@@ -5,6 +5,51 @@ use super::function_parser::FunctionCall;
 use super::functions::execute_function;
 use super::evaluator::evaluate_arg;
 
+/// Upper bound on the estimated bytes one modifier run writes. A wildcard repeats its spec for
+/// every element, so a small body can otherwise multiply a large value many thousands of times.
+const MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Estimated memory cost of a JSON value, on top of its text.
+const VALUE_OVERHEAD_BYTES: usize = 32;
+
+// Tracks the output written by one modifier run. See `MAX_OUTPUT_BYTES`.
+#[derive(Default)]
+struct OutputBudget {
+    used: usize,
+}
+
+impl OutputBudget {
+    fn charge(&mut self, key: &str, value: &Value) -> Result<()> {
+        let used = self
+            .used
+            .saturating_add(key.len())
+            .saturating_add(estimated_size(value));
+        if used > MAX_OUTPUT_BYTES {
+            return Err(Error::ModifierOutputLimit {
+                used,
+                max: MAX_OUTPUT_BYTES,
+            });
+        }
+        self.used = used;
+        Ok(())
+    }
+}
+
+fn estimated_size(value: &Value) -> usize {
+    let content = match value {
+        Value::String(s) => s.len(),
+        Value::Array(items) => items.iter().fold(0, |sum: usize, item| {
+            sum.saturating_add(estimated_size(item))
+        }),
+        Value::Object(map) => map.iter().fold(0, |sum: usize, (key, item)| {
+            sum.saturating_add(key.len())
+                .saturating_add(estimated_size(item))
+        }),
+        _ => 0,
+    };
+    content.saturating_add(VALUE_OVERHEAD_BYTES)
+}
+
 /// Modifier operation variant
 ///
 /// The write rules match Java JOLT's `OpMode`.
@@ -65,7 +110,15 @@ impl ModifierSpec {
         let root = input.clone();
 
         // Apply the spec recursively
-        self.apply_spec_to_value(&mut input, &root, &self.spec, context.as_ref(), &[])?;
+        let mut budget = OutputBudget::default();
+        self.apply_spec_to_value(
+            &mut input,
+            &root,
+            &self.spec,
+            context.as_ref(),
+            &[],
+            &mut budget,
+        )?;
 
         Ok(input)
     }
@@ -81,13 +134,26 @@ impl ModifierSpec {
 
     /// Whether this variant may replace a non-object value with a new object.
     ///
-    /// Java JOLT skips any non-null value that does not fit the spec. Overwrite keeps
-    /// replacing it, which is this crate's established behaviour.
+    /// Java JOLT skips any non-null value that does not fit the spec. Overwrite still replaces
+    /// it on object members, which is this crate's established behaviour. Array elements are
+    /// filtered first by `fits_array_walk`.
     fn should_replace_with_object(&self, target: &Value) -> bool {
         match self.variant {
             ModifierVariant::OverwriteBeta => true,
             ModifierVariant::DefaultBeta => target.is_null(),
             ModifierVariant::DefineBeta => false,
+        }
+    }
+
+    /// Whether a wildcard walk over an array should enter `element` with `spec`.
+    ///
+    /// Scalars do not fit an object spec, so a walk skips them under every variant, as Java
+    /// JOLT does. A nested array fits only a spec that can walk it.
+    fn fits_array_walk(element: &Value, spec: &Value) -> bool {
+        match element {
+            Value::Null | Value::Object(_) => true,
+            Value::Array(_) => spec.get("*").is_some(),
+            _ => false,
         }
     }
 
@@ -98,6 +164,7 @@ impl ModifierSpec {
         spec: &Value,
         context: Option<&Value>,
         path: &[String],
+        budget: &mut OutputBudget,
     ) -> Result<()> {
         match spec {
             Value::Object(spec_map) => {
@@ -119,7 +186,7 @@ impl ModifierSpec {
                 for (key, value) in spec_entries {
                     // Handle wildcard "*" to iterate over all children
                     if key == "*" {
-                        if let Value::Object(nested_spec) = &value {
+                        if value.is_object() {
                             // Get keys to iterate over (from target, not spec)
                             let target_keys: Vec<String> = if let Some(obj) = target.as_object() {
                                 obj.keys().cloned().collect()
@@ -135,20 +202,19 @@ impl ModifierSpec {
                                 new_path.push(child_key.clone());
 
                                 // Get the child value
-                                let child_target = if target.is_array() {
-                                    let idx: usize = child_key.parse().unwrap_or(0);
-                                    target.as_array_mut().unwrap().get_mut(idx)
-                                } else {
-                                    target.as_object_mut().unwrap().get_mut(&child_key)
-                                };
+                                let child_target =
+                                    if target.is_array() {
+                                        let idx: usize = child_key.parse().unwrap_or(0);
+                                        target.as_array_mut().unwrap().get_mut(idx).filter(
+                                            |element| Self::fits_array_walk(element, &value),
+                                        )
+                                    } else {
+                                        target.as_object_mut().unwrap().get_mut(&child_key)
+                                    };
 
                                 if let Some(child) = child_target {
                                     self.apply_spec_to_value(
-                                        child,
-                                        root,
-                                        &Value::Object(nested_spec.clone()),
-                                        context,
-                                        &new_path,
+                                        child, root, &value, context, &new_path, budget,
                                     )?;
                                 }
                             }
@@ -171,19 +237,16 @@ impl ModifierSpec {
                                 continue;
                             }
 
-                            // Clone target for evaluation to avoid borrow issues
-                            let target_clone = target.clone();
-
                             // Evaluate all arguments
                             let mut evaluated_args = Vec::new();
                             for arg in &function_call.args {
-                                let evaluated =
-                                    evaluate_arg(arg, &target_clone, root, context, path)?;
+                                let evaluated = evaluate_arg(arg, target, root, context, path)?;
                                 evaluated_args.push(evaluated);
                             }
 
                             // Execute the function
                             let result = execute_function(&function_call.name, &evaluated_args)?;
+                            budget.charge(&key, &result)?;
 
                             let target_map = target.as_object_mut().unwrap();
                             target_map.insert(key.clone(), result);
@@ -205,11 +268,13 @@ impl ModifierSpec {
                                 &value,
                                 context,
                                 &new_path,
+                                budget,
                             )?;
                         }
                         _ => {
                             // Regular value, just copy it
                             if self.should_write(target, &key) {
+                                budget.charge(&key, &value)?;
                                 let target_map = target.as_object_mut().unwrap();
                                 target_map.insert(key.clone(), value.clone());
                             }
@@ -249,6 +314,58 @@ impl<'de> Deserialize<'de> for ModifierSpec {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_output_budget_stops_wildcard_amplification() {
+        let elements = (MAX_OUTPUT_BYTES / 50_000) + 1;
+        let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(
+                result,
+                Err(Error::ModifierOutputLimit {
+                    max: MAX_OUTPUT_BYTES,
+                    ..
+                })
+            ),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_output_budget_allows_output_under_the_limit() {
+        let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); 100] });
+        let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec)
+            .apply(input)
+            .unwrap();
+
+        assert_eq!(result["items"][99]["x"].as_str().unwrap().len(), 50_000);
+    }
+
+    #[test]
+    fn test_kept_value_is_not_charged() {
+        let mut budget = OutputBudget::default();
+        let modifier = ModifierSpec::new(ModifierVariant::DefineBeta, json!({ "a": "new" }));
+        let mut target = json!({ "a": "old" });
+
+        modifier
+            .apply_spec_to_value(
+                &mut target,
+                &json!({}),
+                &modifier.spec,
+                None,
+                &[],
+                &mut budget,
+            )
+            .unwrap();
+
+        assert_eq!(budget.used, 0);
+    }
 
     #[test]
     fn test_simple_concat() {

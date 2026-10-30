@@ -418,9 +418,13 @@ This produces `{"date": "20250605", "formatted": "2025-06-05"}` by:
 
 `modify` is another name for `modify-overwrite-beta`. These rules match Java JOLT.
 
-A nested spec needs an object, or an array when it uses the `*` wildcard. When the value there has another type, overwrite replaces it with a new object. Default replaces only a `null`. Define keeps the value. A function does not run for a value that is kept, so it cannot fail there.
+A nested spec needs an object, or an array when it uses the `*` wildcard. When an object member has another type, overwrite replaces it with a new object. Default replaces only a `null`. Define keeps the value. A `*` walk over an array skips scalar elements under every variant.
 
-A spec key other than `*` does not address an array index. Next to a `*`, such a key is ignored.
+A function does not run for a value that is kept, so a missing path there is not an error. A malformed function string can still be rejected.
+
+Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block in that case.
+
+One modifier run may write about 64 MiB of output, estimated across every value it writes. Going over is a `ModifierOutputLimit` error.
 
 ### `Remove` operation
 Removes content from the input JSON.

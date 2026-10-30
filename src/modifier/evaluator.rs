@@ -62,6 +62,14 @@ fn evaluate_function_call(
     execute_function(&call.name, &evaluated_args)
 }
 
+/// Walk exact path segments from `base`. Segments can come from body keys, so they are never
+/// parsed as path syntax.
+fn resolve_segments<'a>(base: &'a Value, segments: &[String]) -> Option<&'a Value> {
+    segments
+        .iter()
+        .try_fold(base, |current, segment| child(current, segment))
+}
+
 /// Evaluate a path expression like @(1,name[0])
 ///
 /// In JOLT modifier semantics, @(n,path) navigates the context stack:
@@ -95,22 +103,8 @@ fn evaluate_path_expr(
         let target_depth = path_stack.len().saturating_sub(levels_up);
         let target_path = &path_stack[..target_depth];
 
-        // Start from root and navigate to the target depth
-        if target_path.is_empty() {
-            root
-        } else {
-            let path_str = target_path.join(".");
-            match navigate_path(root, &path_str) {
-                Ok(v) => {
-                    return if path_expr.path.is_empty() {
-                        Ok(v)
-                    } else {
-                        navigate_path(&v, &path_expr.path)
-                    }
-                }
-                Err(_) => root, // Fall back to root if navigation fails
-            }
-        }
+        // Start from root and navigate to the target depth, falling back to root if that fails
+        resolve_segments(root, target_path).unwrap_or(root)
     };
 
     // Navigate the path
@@ -118,20 +112,24 @@ fn evaluate_path_expr(
         return Ok(base.clone());
     }
 
-    navigate_path(base, &path_expr.path)
+    navigate_path(base, &path_expr.path).cloned()
 }
 
 /// Get a child by key. An array takes the key as an index, because wildcard walks record
-/// array positions in the path stack.
+/// array positions in the path stack. Only the canonical form of an index matches.
 fn child<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     match value {
-        Value::Array(items) => key.parse::<usize>().ok().and_then(|index| items.get(index)),
+        Value::Array(items) => key
+            .parse::<usize>()
+            .ok()
+            .filter(|index| index.to_string() == key)
+            .and_then(|index| items.get(index)),
         _ => value.get(key),
     }
 }
 
 /// Navigate a path like "name[0]" or "lower.leading"
-fn navigate_path(base: &Value, path: &str) -> Result<Value> {
+fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<&'a Value> {
     let mut current = base;
     let mut remaining = path;
 
@@ -148,9 +146,12 @@ fn navigate_path(base: &Value, path: &str) -> Result<Value> {
             }
 
             // Find the closing bracket
-            let close_bracket = remaining.find(']').ok_or_else(|| {
-                Error::PathEvaluationError(format!("Unclosed bracket in path: {}", path))
-            })?;
+            let close_bracket = remaining[open_bracket..]
+                .find(']')
+                .map(|offset| open_bracket + offset)
+                .ok_or_else(|| {
+                    Error::PathEvaluationError(format!("Unclosed bracket in path: {}", path))
+                })?;
 
             // Extract the index
             let index_str = &remaining[open_bracket + 1..close_bracket];
@@ -187,7 +188,7 @@ fn navigate_path(base: &Value, path: &str) -> Result<Value> {
         }
     }
 
-    Ok(current.clone())
+    Ok(current)
 }
 
 #[cfg(test)]
@@ -203,7 +204,7 @@ mod tests {
         });
 
         let result = navigate_path(&data, "name").unwrap();
-        assert_eq!(result, json!("John"));
+        assert_eq!(result, &json!("John"));
     }
 
     #[test]
@@ -215,7 +216,7 @@ mod tests {
         });
 
         let result = navigate_path(&data, "person.name").unwrap();
-        assert_eq!(result, json!("John"));
+        assert_eq!(result, &json!("John"));
     }
 
     #[test]
@@ -225,10 +226,10 @@ mod tests {
         });
 
         let result = navigate_path(&data, "name[0]").unwrap();
-        assert_eq!(result, json!("John"));
+        assert_eq!(result, &json!("John"));
 
         let result = navigate_path(&data, "name[1]").unwrap();
-        assert_eq!(result, json!("Doe"));
+        assert_eq!(result, &json!("Doe"));
     }
 
     #[test]
@@ -238,10 +239,34 @@ mod tests {
         });
 
         let result = navigate_path(&data, "items.1.name").unwrap();
-        assert_eq!(result, json!("second"));
+        assert_eq!(result, &json!("second"));
 
         assert!(navigate_path(&data, "items.2.name").is_err());
         assert!(navigate_path(&data, "items.x").is_err());
+    }
+
+    #[test]
+    fn test_navigate_rejects_non_canonical_array_index() {
+        let data = json!({ "items": ["p", "q"] });
+
+        assert!(navigate_path(&data, "items.+1").is_err());
+        assert!(navigate_path(&data, "items.01").is_err());
+    }
+
+    #[test]
+    fn test_navigate_closing_bracket_before_opening_bracket_is_an_error() {
+        let data = json!({ "a]b": ["p"], "a": { "]": 1 } });
+
+        assert!(navigate_path(&data, "a]b[").is_err());
+        assert_eq!(navigate_path(&data, "a]b[0]").unwrap(), &json!("p"));
+    }
+
+    #[test]
+    fn test_resolve_segments_reads_keys_literally() {
+        let data = json!({ "a.b": { "c[0]": "exact" }, "a": { "b": "wrong" } });
+        let segments = ["a.b".to_string(), "c[0]".to_string()];
+
+        assert_eq!(resolve_segments(&data, &segments), Some(&json!("exact")));
     }
 
     #[test]
@@ -253,6 +278,6 @@ mod tests {
         });
 
         let result = navigate_path(&data, "lower.leading").unwrap();
-        assert_eq!(result, json!("hello"));
+        assert_eq!(result, &json!("hello"));
     }
 }

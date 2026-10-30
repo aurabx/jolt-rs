@@ -11,12 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `modify-default-beta` and `modify-define-beta` now follow their own write rules. Both used to behave like `modify-overwrite-beta`, so specs that relied on overwriting existing values will now keep them. Use `modify-overwrite-beta` to overwrite (AURA-2604).
 - **Breaking:** the two rules also now match Java JOLT, which is the reverse of what earlier docs said. `modify-default-beta` writes when the key is absent or null. `modify-define-beta` writes only when the key is absent.
 - **Breaking:** under `modify-default-beta` and `modify-define-beta`, a nested spec no longer replaces an existing value of another type. A `null` is replaced under default and kept under define.
-- **Breaking:** the `*` wildcard now walks arrays under every modifier operation. A spec key other than `*` next to it is ignored on an array.
+- **Breaking:** the `*` wildcard now walks arrays under every modifier operation. It skips scalar elements. A spec key other than `*` next to it is ignored on an array.
+- **Breaking:** `Error` has a new `ModifierOutputLimit` variant. Exhaustive matches on it must handle it.
+- **Breaking:** one modifier run may write about 64 MiB of output, estimated across every value it writes. Going over is a `ModifierOutputLimit` error. A wildcard repeats its spec per element, so a small body could otherwise use gigabytes of memory.
 - `modify-default-beta` and `modify-define-beta` no longer run a function for a value they keep, so a missing path there is not an error.
 
 ### Fixed
 - A `*` wildcard in a modifier spec replaced an array with an empty object, which lost its data. This affected `modify` and `modify-overwrite-beta`.
-- Modifier paths can now step through array indexes, as in `@(1,items.0.name)`. Before, `@(n,...)` from inside an array element fell back to the root and could read the wrong value.
+- Modifier paths can now step through array indexes, as in `@(1,items.0.name)`. Before, these paths failed with `Key not found`. Only canonical indexes match, so `+1` and `01` do not.
+- `@(n,...)` no longer clones the whole ancestor for each element. A wildcard over a large collection took quadratic time, which a small body could use to hold a worker for minutes.
+- Body keys under a wildcard are now read literally by `@(n,...)`. A key with a dot could read a different record, and a key with `]` before `[` could panic.
+- A path with `]` before `[` now reads correctly or returns an error. It used to panic.
 
 ## [0.8.0] - 2026-10-31
 

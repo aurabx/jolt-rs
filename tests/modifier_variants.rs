@@ -1,5 +1,6 @@
 //! Write rules for the modifier operations, checked through `transform()` with parsed specs.
-//! The expected results follow Java JOLT's `OpMode` and `DataType`.
+//! The write rules follow Java JOLT's `OpMode` and `DataType`. Tests named `..._only_replaces_...`
+//! and `wildcard_keeps_the_array_...` pin deliberate differences from Java.
 
 use harmony_jolt::{transform, Error, TransformSpec};
 use serde_json::{json, Value};
@@ -184,23 +185,91 @@ fn wildcard_over_an_array_applies_the_write_rule_per_element() {
 }
 
 #[test]
-fn wildcard_over_an_array_leaves_scalar_elements_to_the_write_rule() {
+fn wildcard_over_an_array_skips_scalar_elements_and_follows_the_rule_for_null() {
     let spec = json!({"items": {"*": {"a": "=concat('new')"}}});
-    let input = json!({"items": ["keep", null]});
+    let input = json!({"items": ["keep", 1, true, null]});
+    let expected = json!({"items": ["keep", 1, true, {"a": "new"}]});
 
     assert_all(
-        &OVERWRITE_NAMES,
+        &[OVERWRITE_NAMES[0], OVERWRITE_NAMES[1], DEFAULT],
         input.clone(),
         spec.clone(),
-        json!({"items": [{"a": "new"}, {"a": "new"}]}),
-    );
-    assert_all(
-        &[DEFAULT],
-        input.clone(),
-        spec.clone(),
-        json!({"items": ["keep", {"a": "new"}]}),
+        expected,
     );
     assert_all(&[DEFINE], input.clone(), spec, input);
+}
+
+#[test]
+fn wildcard_over_an_array_keeps_a_nested_array_a_literal_spec_cannot_walk() {
+    let input = json!({"items": [[1, 2]]});
+    assert_all(
+        &ALL_NAMES,
+        input.clone(),
+        json!({"items": {"*": {"a": "new"}}}),
+        input,
+    );
+}
+
+#[test]
+fn wildcards_walk_nested_arrays() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"items": [[{"v": "A"}], [{"v": "B"}]]}),
+        json!({"items": {"*": {"*": {"lower": "=toLower(@(1,v))"}}}}),
+        json!({"items": [[{"v": "A", "lower": "a"}], [{"v": "B", "lower": "b"}]]}),
+    );
+}
+
+#[test]
+fn wildcard_walks_a_root_array_and_an_empty_array() {
+    let spec = json!({"*": {"a": "new"}});
+    assert_all(
+        &ALL_NAMES,
+        json!([{}, {}]),
+        spec.clone(),
+        json!([{"a": "new"}, {"a": "new"}]),
+    );
+    assert_all(&ALL_NAMES, json!([]), spec, json!([]));
+}
+
+#[test]
+fn path_reference_treats_body_keys_literally() {
+    assert_all(
+        &ALL_NAMES,
+        json!({
+            "users.1": {"code": "own"},
+            "users": [{"code": "u0"}, {"code": "u1"}]
+        }),
+        json!({"users.1": {"a": {"v": "=concat(@(2,code))"}}}),
+        json!({
+            "users.1": {"code": "own", "a": {"v": "own"}},
+            "users": [{"code": "u0"}, {"code": "u1"}]
+        }),
+    );
+}
+
+#[test]
+fn hostile_body_key_does_not_panic() {
+    let spec = json!({"items": {"*": {"a": {"b": "=toLower(@(2,v))"}}}});
+    let input = json!({"items.]": {}, "items": {"][": {"v": "OWN"}}});
+
+    assert_all(
+        &ALL_NAMES,
+        input,
+        spec,
+        json!({"items.]": {}, "items": {"][": {"v": "OWN", "a": {"b": "own"}}}}),
+    );
+}
+
+// Each element used to clone its whole ancestor, so this size took many minutes.
+#[test]
+fn ancestor_reference_over_a_large_array_is_linear() {
+    let input = json!({"list": vec![json!({}); 200_000], "name": "n"});
+    let spec = json!({"list": {"*": {"s": {"x": "=concat(@(4,name))"}}}});
+
+    let result = run("modify", input, spec);
+
+    assert_eq!(result["list"][199_999]["s"]["x"], json!("n"));
 }
 
 #[test]
