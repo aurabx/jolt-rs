@@ -28,7 +28,7 @@ pub use error::{Error, Result};
 /// The transformation can compose of many operations that are chained together.
 ///
 /// ### Operations
-/// 1. [`shift`](TransformSpec#shift-operation): copy data from the input tree and put it the output tree
+/// 1. [`shift`](TransformSpec#shift-operation): copy data from the input tree and put it in the output tree
 /// 2. [`default`](TransformSpec#default-operation): apply default values to the tree
 /// 3. [`remove`](TransformSpec#remove-operation): remove data from the tree
 /// 4. [`modify`](TransformSpec#modify-operation): modify data using functions like concat, toLower, etc.

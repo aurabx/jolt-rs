@@ -6,11 +6,6 @@
 </div>
 
 <div align="center">
-   <!-- CI status -->
-  <a href="https://github.com/aurabx/harmony-jolt/actions">
-    <img src="https://github.com/aurabx/harmony-jolt/workflows/CI/badge.svg"
-      alt="CI Status" />
-  </a>
   <!-- Crates version -->
   <a href="https://crates.io/crates/harmony-jolt">
     <img src="https://img.shields.io/crates/v/harmony-jolt?style=flat-square"
@@ -35,7 +30,7 @@
 ## Overview
 JSON to JSON transformation where the "specification" for the transform is itself a JSON document.
 
-Port of Java [Jolt](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java)  library written in Rust.
+Port of Java [Jolt](https://github.com/bazaarvoice/jolt) library written in Rust.
 
 This is a fork of [Fluvio Jolt](https://github.com/infinyon/fluvio-jolt), created by the Fluvio team. That project was archived on March 2nd 2025.
 
@@ -44,7 +39,7 @@ This is a fork of [Fluvio Jolt](https://github.com/infinyon/fluvio-jolt), create
 Add `harmony-jolt` crate to your `Cargo.toml` file:
 ```toml
 [dependencies]
-harmony-jolt = { version = "0.4"}
+harmony-jolt = "0.8"
 ```
 
 Then, for example, if you want to repack your JSON record, you can do the following:
@@ -74,7 +69,7 @@ serde_json::from_str(r#"[
     }
   ]"#).unwrap();
 
-let output = transform(input, &spec);
+let output = transform(input, &spec).unwrap();
 
 assert_eq!(output, json!({
     "data" : {
@@ -87,10 +82,12 @@ assert_eq!(output, json!({
 }));
 ```
 ## Supported Operations
-1. `shift`: copy data from the input tree and put it the output tree
+1. `shift`: copy data from the input tree and put it in the output tree
 2. `default`: apply default values to the tree
 3. `modify-overwrite-beta`: modify data using functions (concat, toLower, toUpper, substring, trim, join, split)
 4. `remove`: remove data from the tree
+
+Operations run in the order they appear in the spec.
 
 See `SPEC.md` for more info on specifics of execution order and DSL grammar.
 
@@ -168,7 +165,7 @@ The `shift` specification on the keys level supports wildcards and conditions:
 
 `&(x,y)` means go up the path x levels and get the yth match from that level.
 
-0th match is always the entire input they and the rest are the specific things the `*`s matched.
+The 0th match is always the entire input key. The rest are the specific things the `*`s matched.
 
 `&` == `&(0)` == `&(0,0)` and `&(x)` == `&(x,0)` 
 
@@ -219,7 +216,6 @@ If you want only `id` and `name` in the output, the spec is:
             }
         }
     }
-}
 </pre>
 for the input:
 <pre>
@@ -246,7 +242,7 @@ will produce:
 
 #### `$` Wildcard
 
-`$` wildcard allows accessing matched keys from the path and use them on the right hand side.
+`$` on the left hand side takes a matched key from the path and writes it as a value. It is not valid on the right hand side.
 
 See tests in `tests/java/resources/shift` for usage examples.
 
@@ -254,7 +250,7 @@ See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jol
 
 #### `@` Wildcard
 
-`@` wildcard allows accessing values of matched keys from the path and use them on the right hand side.
+`@` on the left hand side takes the value at a path and writes it to the output. On the right hand side, `@(n,key)` uses an input value as part of the output path.
 
 See tests in `tests/java/resources/shift` for usage examples.
 
@@ -301,7 +297,7 @@ Applies default values if the value is not present in the input JSON.
  <pre>
 {
     "phones": {
-        "mobile": 01234567,
+        "mobile": "01234567",
         "country": "US"
     }
 }
@@ -310,7 +306,7 @@ with the following specification for `default` operation:
 <pre>
 {
     "phones": {
-        "mobile": 0000000,
+        "mobile": "0000000",
         "code": "+1"
     }
 }
@@ -319,7 +315,7 @@ the output JSON will be:
 <pre>
 {
     "phones": {
-        "mobile": 01234567,
+        "mobile": "01234567",
         "country": "US",
         "code": "+1"
     }
@@ -396,7 +392,6 @@ Functions are specified using the `=functionName(args...)` syntax:
 - **Literals**: Single-quoted strings (required) like `' '`, `'_'`, or `'-'`. Double quotes are not supported.
 - **Numbers**: Unquoted numeric literals like `0`, `4`, `42`, or `100`. These are passed as actual numbers to functions.
 - **Path expressions**: `@(n,path)` to reference values (see above)
-- **Context references**: `^value` to reference context values
 - **Identifiers**: Unquoted values that will be looked up
 - **Nested functions**: Functions can be nested (see example below)
 
@@ -429,7 +424,7 @@ The spec structure matches the input JSON structure. The value of fields is igno
  <pre>
 {
     "phones": {
-        "mobile": 01234567,
+        "mobile": "01234567",
         "country": "US"
     }
 }
@@ -446,7 +441,7 @@ the output JSON will be:
 <pre>
 {
     "phones": {
-        "mobile": 01234567
+        "mobile": "01234567"
     }
 }
 </pre>
