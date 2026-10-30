@@ -403,6 +403,30 @@ fn wildcard_does_not_enter_a_leaf_literal_key() {
 }
 
 #[test]
+fn wildcard_walks_an_object_kept_under_a_leaf_literal_key() {
+    let spec = json!({"a": {"*": {"l": "star"}, "c": "new"}});
+    let input = json!({"a": {"c": {"v": "V"}}});
+
+    assert_all(
+        &[DEFAULT, DEFINE],
+        input.clone(),
+        spec.clone(),
+        json!({"a": {"c": {"v": "V", "l": "star"}}}),
+    );
+    assert_all(&OVERWRITE_NAMES, input, spec, json!({"a": {"c": "new"}}));
+}
+
+#[test]
+fn overwrite_wildcard_beats_a_literal_listed_first_on_a_shared_leaf() {
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"a": {"b": {}}}),
+        json!({"a": {"b": {"x": "lit"}, "*": {"x": "star"}}}),
+        json!({"a": {"b": {"x": "star"}}}),
+    );
+}
+
+#[test]
 fn overwrite_wildcard_still_replaces_a_scalar_from_the_input() {
     assert_all(
         &OVERWRITE_NAMES,

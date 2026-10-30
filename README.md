@@ -424,7 +424,7 @@ A function does not run for a value that is kept, so a missing path there is not
 
 Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block for a literal key, and honours `[n]`.
 
-A spec that holds only `*` walks what exists. It never creates a parent or replaces a value. Literal keys run before `*`, so spec order does not matter. Under overwrite, `*` replaces a leaf it shares with a literal object key. `*` does not walk a key that the same block gives a leaf value.
+A spec that holds only `*` walks what exists. It never creates a parent or replaces a value. Literal keys run before `*`, so spec order does not matter. Under overwrite, `*` replaces a leaf it shares with a literal object key. `*` does not enter a scalar under a key that the same block gives a leaf value.
 
 A path that cannot be resolved is an error under every variant. That includes `@(n,...)` when the level `n` does not exist in the input.
 

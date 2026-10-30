@@ -154,12 +154,15 @@ impl ModifierSpec {
                         if value.is_object() {
                             // Get keys to iterate over (from target, not spec)
                             let target_keys: Vec<String> = if let Some(obj) = target.as_object() {
-                                // A leaf literal owns its key, so the walk leaves that value alone
-                                obj.keys()
-                                    .filter(|key| {
-                                        spec_map.get(key.as_str()).is_none_or(Value::is_object)
+                                // A scalar under a leaf literal key belongs to that literal
+                                obj.iter()
+                                    .filter(|(key, member)| {
+                                        member.is_object()
+                                            || !spec_map
+                                                .get(key.as_str())
+                                                .is_some_and(|literal| !literal.is_object())
                                     })
-                                    .cloned()
+                                    .map(|(key, _)| key.clone())
                                     .collect()
                             } else if let Some(arr) = target.as_array() {
                                 (0..arr.len()).map(|i| i.to_string()).collect()
