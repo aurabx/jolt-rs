@@ -237,12 +237,18 @@ pub struct TransformSpec(Vec<SpecEntry>);
 pub(crate) enum SpecEntry {
     Shift(Shift),
     Default(Spec),
-    #[serde(
-        alias = "modify-overwrite-beta",
-        alias = "modify-default-beta",
-        alias = "modify-define-beta"
-    )]
+    #[serde(alias = "modify-overwrite-beta")]
     Modify(ModifierSpec),
+    #[serde(
+        rename = "modify-default-beta",
+        deserialize_with = "ModifierSpec::deserialize_default_beta"
+    )]
+    ModifyDefault(ModifierSpec),
+    #[serde(
+        rename = "modify-define-beta",
+        deserialize_with = "ModifierSpec::deserialize_define_beta"
+    )]
+    ModifyDefine(ModifierSpec),
     Remove(Spec),
 }
 

@@ -121,6 +121,15 @@ fn evaluate_path_expr(
     navigate_path(base, &path_expr.path)
 }
 
+/// Get a child by key. An array takes the key as an index, because wildcard walks record
+/// array positions in the path stack.
+fn child<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    match value {
+        Value::Array(items) => key.parse::<usize>().ok().and_then(|index| items.get(index)),
+        _ => value.get(key),
+    }
+}
+
 /// Navigate a path like "name[0]" or "lower.leading"
 fn navigate_path(base: &Value, path: &str) -> Result<Value> {
     let mut current = base;
@@ -134,8 +143,7 @@ fn navigate_path(base: &Value, path: &str) -> Result<Value> {
 
             // Navigate to the key if not empty
             if !key.is_empty() {
-                current = current
-                    .get(key)
+                current = child(current, key)
                     .ok_or_else(|| Error::PathEvaluationError(format!("Key not found: {}", key)))?;
             }
 
@@ -166,13 +174,12 @@ fn navigate_path(base: &Value, path: &str) -> Result<Value> {
             // No array notation, check for dot notation
             if let Some(dot_pos) = remaining.find('.') {
                 let key = &remaining[..dot_pos];
-                current = current
-                    .get(key)
+                current = child(current, key)
                     .ok_or_else(|| Error::PathEvaluationError(format!("Key not found: {}", key)))?;
                 remaining = &remaining[dot_pos + 1..];
             } else {
                 // Last segment
-                current = current.get(remaining).ok_or_else(|| {
+                current = child(current, remaining).ok_or_else(|| {
                     Error::PathEvaluationError(format!("Key not found: {}", remaining))
                 })?;
                 break;
@@ -222,6 +229,19 @@ mod tests {
 
         let result = navigate_path(&data, "name[1]").unwrap();
         assert_eq!(result, json!("Doe"));
+    }
+
+    #[test]
+    fn test_navigate_array_index_segment() {
+        let data = json!({
+            "items": [{ "name": "first" }, { "name": "second" }]
+        });
+
+        let result = navigate_path(&data, "items.1.name").unwrap();
+        assert_eq!(result, json!("second"));
+
+        assert!(navigate_path(&data, "items.2.name").is_err());
+        assert!(navigate_path(&data, "items.x").is_err());
     }
 
     #[test]

@@ -6,12 +6,16 @@ use super::functions::execute_function;
 use super::evaluator::evaluate_arg;
 
 /// Modifier operation variant
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+///
+/// The write rules match Java JOLT's `OpMode`.
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum ModifierVariant {
+    /// Always writes.
     OverwriteBeta,
+    /// Writes when the key is absent or its value is null.
     DefaultBeta,
+    /// Writes only when the key is absent.
     DefineBeta,
 }
 
@@ -28,6 +32,30 @@ impl ModifierSpec {
         Self { variant, spec }
     }
 
+    /// Deserialize the spec of a `modify-default-beta` operation
+    pub fn deserialize_default_beta<'de, D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let spec = Value::deserialize(deserializer)?;
+        Ok(Self {
+            variant: ModifierVariant::DefaultBeta,
+            spec,
+        })
+    }
+
+    /// Deserialize the spec of a `modify-define-beta` operation
+    pub fn deserialize_define_beta<'de, D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let spec = Value::deserialize(deserializer)?;
+        Ok(Self {
+            variant: ModifierVariant::DefineBeta,
+            spec,
+        })
+    }
+
     /// Apply the modifier transformation to the input
     pub fn apply(&self, mut input: Value) -> Result<Value> {
         // Get context if present
@@ -42,6 +70,27 @@ impl ModifierSpec {
         Ok(input)
     }
 
+    /// Whether this variant may write to `key` of the object `target`
+    fn should_write(&self, target: &Value, key: &str) -> bool {
+        match self.variant {
+            ModifierVariant::OverwriteBeta => true,
+            ModifierVariant::DefaultBeta => matches!(target.get(key), None | Some(Value::Null)),
+            ModifierVariant::DefineBeta => target.get(key).is_none(),
+        }
+    }
+
+    /// Whether this variant may replace a non-object value with a new object.
+    ///
+    /// Java JOLT skips any non-null value that does not fit the spec. Overwrite keeps
+    /// replacing it, which is this crate's established behaviour.
+    fn should_replace_with_object(&self, target: &Value) -> bool {
+        match self.variant {
+            ModifierVariant::OverwriteBeta => true,
+            ModifierVariant::DefaultBeta => target.is_null(),
+            ModifierVariant::DefineBeta => false,
+        }
+    }
+
     fn apply_spec_to_value(
         &self,
         target: &mut Value,
@@ -52,8 +101,12 @@ impl ModifierSpec {
     ) -> Result<()> {
         match spec {
             Value::Object(spec_map) => {
-                // Ensure target is an object
-                if !target.is_object() {
+                // A wildcard walks an array in place. Anything else needs an object.
+                let walks_array = target.is_array() && spec_map.contains_key("*");
+                if !target.is_object() && !walks_array {
+                    if !self.should_replace_with_object(target) {
+                        return Ok(());
+                    }
                     *target = Value::Object(Map::new());
                 }
 
@@ -103,10 +156,20 @@ impl ModifierSpec {
                         continue;
                     }
 
+                    // Literal keys address object members. Array index keys are not supported.
+                    if target.is_array() {
+                        continue;
+                    }
+
                     match &value {
                         Value::String(s) if s.starts_with('=') => {
                             // This is a function call
                             let function_call = FunctionCall::parse(s)?;
+
+                            // A kept value must not fail because its function cannot run
+                            if !self.should_write(target, &key) {
+                                continue;
+                            }
 
                             // Clone target for evaluation to avoid borrow issues
                             let target_clone = target.clone();
@@ -122,27 +185,8 @@ impl ModifierSpec {
                             // Execute the function
                             let result = execute_function(&function_call.name, &evaluated_args)?;
 
-                            // Get mutable reference to target_map after evaluation
                             let target_map = target.as_object_mut().unwrap();
-
-                            // Apply based on variant
-                            match self.variant {
-                                ModifierVariant::OverwriteBeta => {
-                                    // Always write
-                                    target_map.insert(key.clone(), result);
-                                }
-                                ModifierVariant::DefaultBeta => {
-                                    // Only write if key doesn't exist
-                                    target_map.entry(key.clone()).or_insert(result);
-                                }
-                                ModifierVariant::DefineBeta => {
-                                    // Only write if key doesn't exist or is null
-                                    if !target_map.contains_key(&key) || target_map[&key].is_null()
-                                    {
-                                        target_map.insert(key.clone(), result);
-                                    }
-                                }
-                            }
+                            target_map.insert(key.clone(), result);
                         }
                         Value::Object(_) => {
                             // Nested spec, recurse
@@ -165,20 +209,9 @@ impl ModifierSpec {
                         }
                         _ => {
                             // Regular value, just copy it
-                            let target_map = target.as_object_mut().unwrap();
-                            match self.variant {
-                                ModifierVariant::OverwriteBeta => {
-                                    target_map.insert(key.clone(), value.clone());
-                                }
-                                ModifierVariant::DefaultBeta => {
-                                    target_map.entry(key.clone()).or_insert(value.clone());
-                                }
-                                ModifierVariant::DefineBeta => {
-                                    if !target_map.contains_key(&key) || target_map[&key].is_null()
-                                    {
-                                        target_map.insert(key.clone(), value.clone());
-                                    }
-                                }
+                            if self.should_write(target, &key) {
+                                let target_map = target.as_object_mut().unwrap();
+                                target_map.insert(key.clone(), value.clone());
                             }
                         }
                     }
@@ -197,7 +230,8 @@ impl ModifierSpec {
     }
 }
 
-// Deserialization support for ModifierSpec
+// `modify` and `modify-overwrite-beta` deserialize here. The other names have their own
+// functions, because the variant comes from the operation name, not from the spec body.
 impl<'de> Deserialize<'de> for ModifierSpec {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -205,7 +239,7 @@ impl<'de> Deserialize<'de> for ModifierSpec {
     {
         let value = Value::deserialize(deserializer)?;
         Ok(ModifierSpec {
-            variant: ModifierVariant::OverwriteBeta, // Default variant
+            variant: ModifierVariant::OverwriteBeta,
             spec: value,
         })
     }

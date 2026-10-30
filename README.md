@@ -413,8 +413,14 @@ This produces `{"date": "20250605", "formatted": "2025-06-05"}` by:
 
 #### Modifier Variants
 - **`modify-overwrite-beta`**: Always writes the result, overwriting existing values
-- **`modify-default-beta`**: Only writes if the key doesn't exist
-- **`modify-define-beta`**: Only writes if the key doesn't exist or is null
+- **`modify-default-beta`**: Only writes if the key doesn't exist or its value is null
+- **`modify-define-beta`**: Only writes if the key doesn't exist
+
+`modify` is another name for `modify-overwrite-beta`. These rules match Java JOLT.
+
+A nested spec needs an object, or an array when it uses the `*` wildcard. When the value there has another type, overwrite replaces it with a new object. Default replaces only a `null`. Define keeps the value. A function does not run for a value that is kept, so it cannot fail there.
+
+A spec key other than `*` does not address an array index. Next to a `*`, such a key is ignored.
 
 ### `Remove` operation
 Removes content from the input JSON.

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Breaking:** `modify-default-beta` and `modify-define-beta` now follow their own write rules. Both used to behave like `modify-overwrite-beta`, so specs that relied on overwriting existing values will now keep them. Use `modify-overwrite-beta` to overwrite (AURA-2604).
+- **Breaking:** the two rules also now match Java JOLT, which is the reverse of what earlier docs said. `modify-default-beta` writes when the key is absent or null. `modify-define-beta` writes only when the key is absent.
+- **Breaking:** under `modify-default-beta` and `modify-define-beta`, a nested spec no longer replaces an existing value of another type. A `null` is replaced under default and kept under define.
+- **Breaking:** the `*` wildcard now walks arrays under every modifier operation. A spec key other than `*` next to it is ignored on an array.
+- `modify-default-beta` and `modify-define-beta` no longer run a function for a value they keep, so a missing path there is not an error.
+
+### Fixed
+- A `*` wildcard in a modifier spec replaced an array with an empty object, which lost its data. This affected `modify` and `modify-overwrite-beta`.
+- Modifier paths can now step through array indexes, as in `@(1,items.0.name)`. Before, `@(n,...)` from inside an array element fell back to the root and could read the wrong value.
+
 ## [0.8.0] - 2026-10-31
 
 ### Added

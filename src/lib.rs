@@ -80,7 +80,9 @@ pub fn transform(input: Value, spec: &TransformSpec) -> Result<Value> {
         match entry {
             SpecEntry::Shift(shift) => result = shift.apply(&result)?,
             SpecEntry::Default(spec) => result = default(result, spec),
-            SpecEntry::Modify(spec) => result = modify(result, spec)?,
+            SpecEntry::Modify(spec)
+            | SpecEntry::ModifyDefault(spec)
+            | SpecEntry::ModifyDefine(spec) => result = modify(result, spec)?,
             SpecEntry::Remove(spec) => result = remove(result, spec),
         }
     }
