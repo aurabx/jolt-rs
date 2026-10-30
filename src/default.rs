@@ -123,9 +123,15 @@ mod test {
 
     #[test]
     fn test_array_of_objects_literal_is_inserted_as_array() {
-        let output = run(json!({ "coding": [{ "code": "a" }, { "code": "b" }] }), json!({}));
+        let output = run(
+            json!({ "coding": [{ "code": "a" }, { "code": "b" }] }),
+            json!({}),
+        );
 
-        assert_eq!(output, json!({ "coding": [{ "code": "a" }, { "code": "b" }] }));
+        assert_eq!(
+            output,
+            json!({ "coding": [{ "code": "a" }, { "code": "b" }] })
+        );
     }
 
     #[test]
@@ -137,14 +143,20 @@ mod test {
 
     #[test]
     fn test_null_value_is_replaced() {
-        let output = run(json!({ "a": "d", "b": ["x"] }), json!({ "a": null, "b": null }));
+        let output = run(
+            json!({ "a": "d", "b": ["x"] }),
+            json!({ "a": null, "b": null }),
+        );
 
         assert_eq!(output, json!({ "a": "d", "b": ["x"] }));
     }
 
     #[test]
     fn test_null_parent_is_replaced_with_object() {
-        let output = run(json!({ "meta": { "source": "s" } }), json!({ "meta": null }));
+        let output = run(
+            json!({ "meta": { "source": "s" } }),
+            json!({ "meta": null }),
+        );
 
         assert_eq!(output, json!({ "meta": { "source": "s" } }));
     }
@@ -156,14 +168,23 @@ mod test {
             json!({ "some": { "b": "bb", "c": "cc" } }),
         );
 
-        assert_eq!(output, json!({ "some": { "b": "bb", "c": "cc", "a": "b" } }));
+        assert_eq!(
+            output,
+            json!({ "some": { "b": "bb", "c": "cc", "a": "b" } })
+        );
     }
 
     #[test]
     fn test_deep_path_is_created_in_empty_input() {
-        let output = run(json!({ "level1": { "level2": { "new": { "a": "b" } } } }), json!({}));
+        let output = run(
+            json!({ "level1": { "level2": { "new": { "a": "b" } } } }),
+            json!({}),
+        );
 
-        assert_eq!(output, json!({ "level1": { "level2": { "new": { "a": "b" } } } }));
+        assert_eq!(
+            output,
+            json!({ "level1": { "level2": { "new": { "a": "b" } } } })
+        );
     }
 
     #[test]

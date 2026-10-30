@@ -63,7 +63,7 @@ fn evaluate_function_call(
 }
 
 /// Evaluate a path expression like @(1,name[0])
-/// 
+///
 /// In JOLT modifier semantics, @(n,path) navigates the context stack:
 /// - @(1,path): reference from current object (the one being modified)
 /// - @(2,path): go up 1 level (parent), then navigate path  

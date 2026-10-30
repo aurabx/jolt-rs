@@ -135,7 +135,9 @@ impl KeyPattern {
                 .filter(|index| *index < len)
                 .into_iter()
                 .collect(),
-            KeyPattern::Glob(segments) if segments.iter().all(|s| s.is_empty()) => (0..len).collect(),
+            KeyPattern::Glob(segments) if segments.iter().all(|s| s.is_empty()) => {
+                (0..len).collect()
+            }
             KeyPattern::Glob(segments) => (0..len)
                 .filter(|index| glob_matches(segments, &index.to_string()))
                 .collect(),
@@ -258,7 +260,10 @@ mod test {
 
     #[test]
     fn test_star_leaf_removes_every_key() {
-        let output = run(json!({ "data": { "*": "" } }), json!({ "data": { "a": 1, "b": 2 }, "x": 1 }));
+        let output = run(
+            json!({ "data": { "*": "" } }),
+            json!({ "data": { "a": 1, "b": 2 }, "x": 1 }),
+        );
 
         assert_eq!(output, json!({ "data": {}, "x": 1 }));
     }
@@ -285,21 +290,30 @@ mod test {
 
     #[test]
     fn test_array_indexes_are_removed_without_shifting() {
-        let output = run(json!({ "items": { "0": "", "2": "" } }), json!({ "items": ["a", "b", "c", "d"] }));
+        let output = run(
+            json!({ "items": { "0": "", "2": "" } }),
+            json!({ "items": ["a", "b", "c", "d"] }),
+        );
 
         assert_eq!(output, json!({ "items": ["b", "d"] }));
     }
 
     #[test]
     fn test_star_leaf_empties_array() {
-        let output = run(json!({ "items": { "*": "" } }), json!({ "items": [1, 2, 3] }));
+        let output = run(
+            json!({ "items": { "*": "" } }),
+            json!({ "items": [1, 2, 3] }),
+        );
 
         assert_eq!(output, json!({ "items": [] }));
     }
 
     #[test]
     fn test_key_with_slash_and_tilde_is_literal() {
-        let output = run(json!({ "a/b": "", "c~d": "" }), json!({ "a/b": 1, "c~d": 2, "e": 3 }));
+        let output = run(
+            json!({ "a/b": "", "c~d": "" }),
+            json!({ "a/b": 1, "c~d": 2, "e": 3 }),
+        );
 
         assert_eq!(output, json!({ "e": 3 }));
     }
@@ -346,12 +360,18 @@ mod test {
             json!({ "patient": [{ "ssn": 1, "id": "a" }, { "ssn": 2, "id": "b" }] }),
         );
 
-        assert_eq!(output, json!({ "patient": [{ "id": "a" }, { "ssn": 2, "id": "b" }] }));
+        assert_eq!(
+            output,
+            json!({ "patient": [{ "id": "a" }, { "ssn": 2, "id": "b" }] })
+        );
     }
 
     #[test]
     fn test_array_index_key_is_parsed_as_number() {
-        let output = run(json!({ "items": { "01": "" } }), json!({ "items": ["a", "b", "c"] }));
+        let output = run(
+            json!({ "items": { "01": "" } }),
+            json!({ "items": ["a", "b", "c"] }),
+        );
 
         assert_eq!(output, json!({ "items": ["a", "c"] }));
     }
@@ -359,9 +379,14 @@ mod test {
     #[test]
     fn test_partial_glob_on_array_indexes() {
         let input: Vec<u32> = (0..25).collect();
-        let output = run(json!({ "items": { "*0": "", "1*": "" } }), json!({ "items": input }));
+        let output = run(
+            json!({ "items": { "*0": "", "1*": "" } }),
+            json!({ "items": input }),
+        );
 
-        let expected: Vec<u32> = (0..25).filter(|i| i % 10 != 0 && !i.to_string().starts_with('1')).collect();
+        let expected: Vec<u32> = (0..25)
+            .filter(|i| i % 10 != 0 && !i.to_string().starts_with('1'))
+            .collect();
         assert_eq!(output, json!({ "items": expected }));
     }
 

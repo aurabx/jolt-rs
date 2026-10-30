@@ -572,7 +572,10 @@ fn test_parse_rhs_idx_at() {
 fn test_parse_rhs_invalid_index_literal() {
     // invalid numeric literal inside brackets should include the raw string in the error
     let result = Rhs::parse("data[not_a_number]");
-    assert!(result.is_err(), "Expected parse error for non-numeric index");
+    assert!(
+        result.is_err(),
+        "Expected parse error for non-numeric index"
+    );
 
     let err = result.unwrap_err();
     let err_msg = err.to_string();

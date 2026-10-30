@@ -290,7 +290,8 @@ mod tests {
     #[test]
     fn test_parse_concat_with_nested_substring() {
         let call =
-            FunctionCall::parse("=concat(=substring(@(0),0,4),\"\\-\",=substring(@(0),4,6))").unwrap();
+            FunctionCall::parse("=concat(=substring(@(0),0,4),\"\\-\",=substring(@(0),4,6))")
+                .unwrap();
         assert_eq!(call.name, "concat");
         assert_eq!(call.args.len(), 3);
 

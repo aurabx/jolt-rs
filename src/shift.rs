@@ -226,7 +226,7 @@ fn apply_match<'ctx, 'input: 'ctx>(
 
 // Evaluate an @ expression into a json value using the given path
 fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
-    lookup_at(at, path).map(Value::clone)
+    lookup_at(at, path).cloned()
 }
 
 // Find the value an @ expression points at, without copying it. Index expressions use this
@@ -499,9 +499,9 @@ fn match_stars<'ctx, 'input: 'ctx>(
 
     for pattern in stars.iter().skip(1) {
         if !pattern.is_empty() {
-            match k.find(pattern.as_str()) {
-                None => return None,
-                Some(idx) => match &k {
+            {
+                let idx = k.find(pattern.as_str())?;
+                match &k {
                     Cow::Borrowed(s) => {
                         m.push(Cow::Borrowed(&s[..idx]));
                         k = Cow::Borrowed(&s[idx..]);
@@ -510,7 +510,7 @@ fn match_stars<'ctx, 'input: 'ctx>(
                         m.push(Cow::Owned(s[..idx].to_owned()));
                         k = Cow::Owned(s[idx..].to_owned());
                     }
-                },
+                }
             }
         } else {
             m.push(k.clone());
@@ -616,12 +616,19 @@ mod test {
     fn test_hash_index_out_of_range_is_an_error() {
         let result = run(json!({ "a": "out[#5]" }), json!({ "a": 1 }));
 
-        assert!(matches!(result, Err(Error::PathIndexOutOfRange { idx: 5, .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::PathIndexOutOfRange { idx: 5, .. })),
+            "got {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_hash_index_in_lookup_is_rejected() {
-        let result = run(json!({ "a": { "@(1,arr[#1])": "out" } }), json!({ "a": 1, "arr": [1] }));
+        let result = run(
+            json!({ "a": { "@(1,arr[#1])": "out" } }),
+            json!({ "a": 1, "arr": [1] }),
+        );
 
         assert!(result.is_err(), "got {:?}", result);
     }
@@ -655,11 +662,22 @@ mod test {
     fn test_at_index_over_padding_limit_is_an_error() {
         let spec = json!({ "v": "out[@(1,idx)]" });
 
-        let from_number = run(spec.clone(), json!({ "v": "x", "idx": MAX_ARRAY_PADDING + 1 }));
-        assert!(matches!(from_number, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_number);
+        let from_number = run(
+            spec.clone(),
+            json!({ "v": "x", "idx": MAX_ARRAY_PADDING + 1 }),
+        );
+        assert!(
+            matches!(from_number, Err(Error::ArrayPaddingLimit { .. })),
+            "got {:?}",
+            from_number
+        );
 
         let from_string = run(spec.clone(), json!({ "v": "x", "idx": "200000" }));
-        assert!(matches!(from_string, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", from_string);
+        assert!(
+            matches!(from_string, Err(Error::ArrayPaddingLimit { .. })),
+            "got {:?}",
+            from_string
+        );
 
         let output = run(spec, json!({ "v": "x", "idx": 3 })).unwrap();
         assert_eq!(output, json!({ "out": [null, null, null, "x"] }));
@@ -670,7 +688,14 @@ mod test {
         let result = run(json!({ "*": "a[&0]" }), json!({ "10000000000": "x" }));
 
         assert!(
-            matches!(result, Err(Error::ArrayPaddingLimit { idx: 10_000_000_000, len: 0, .. })),
+            matches!(
+                result,
+                Err(Error::ArrayPaddingLimit {
+                    idx: 10_000_000_000,
+                    len: 0,
+                    ..
+                })
+            ),
             "got {:?}",
             result
         );
@@ -678,9 +703,16 @@ mod test {
 
     #[test]
     fn test_padding_across_many_arrays_is_bounded() {
-        let result = run(json!({ "*": { "*": "&1[&0]" } }), sparse_objects(1_000, "99999"));
+        let result = run(
+            json!({ "*": { "*": "&1[&0]" } }),
+            sparse_objects(1_000, "99999"),
+        );
 
-        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { .. })),
+            "got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -706,7 +738,11 @@ mod test {
         assert_eq!(output["o99"].as_array().unwrap().len(), 1_001);
 
         let result = run(spec, sparse_objects(101, "1000"));
-        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { .. })),
+            "got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -726,7 +762,15 @@ mod test {
         );
 
         assert!(
-            matches!(result, Err(Error::ArrayPaddingLimit { idx: 60_000, len: 0, used: 60_000, .. })),
+            matches!(
+                result,
+                Err(Error::ArrayPaddingLimit {
+                    idx: 60_000,
+                    len: 0,
+                    used: 60_000,
+                    ..
+                })
+            ),
             "got {:?}",
             result
         );
@@ -736,7 +780,11 @@ mod test {
     fn test_literal_index_is_charged_against_the_budget() {
         let result = run(json!({ "a": "out[200000]" }), json!({ "a": 1 }));
 
-        assert!(matches!(result, Err(Error::ArrayPaddingLimit { idx: 200_000, .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { idx: 200_000, .. })),
+            "got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -748,7 +796,11 @@ mod test {
         assert_eq!(output["a"][50_000][49_999], json!(1));
 
         let result = run(spec, json!({ "50000": { "50001": 1 } }));
-        assert!(matches!(result, Err(Error::ArrayPaddingLimit { .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::ArrayPaddingLimit { .. })),
+            "got {:?}",
+            result
+        );
     }
 
     fn long_index(len: usize) -> String {
@@ -774,7 +826,11 @@ mod test {
             json!({ "v": "x", "idx": long_index(MAX_INDEX_LEN + 1) }),
         );
 
-        assert!(matches!(result, Err(Error::IndexTooLong { .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::IndexTooLong { .. })),
+            "got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -783,20 +839,41 @@ mod test {
         assert_eq!(idx.len(), MAX_INDEX_LEN);
 
         let from_amp = run(json!({ "*": "a[&0]" }), json!({ idx: "x" })).unwrap();
-        assert_eq!(from_amp, json!({ "a": [null, null, null, null, null, "x"] }));
+        assert_eq!(
+            from_amp,
+            json!({ "a": [null, null, null, null, null, "x"] })
+        );
 
-        let from_at = run(json!({ "v": "out[@(1,idx)]" }), json!({ "v": "x", "idx": idx })).unwrap();
-        assert_eq!(from_at, json!({ "out": [null, null, null, null, null, "x"] }));
+        let from_at = run(
+            json!({ "v": "out[@(1,idx)]" }),
+            json!({ "v": "x", "idx": idx }),
+        )
+        .unwrap();
+        assert_eq!(
+            from_at,
+            json!({ "out": [null, null, null, null, null, "x"] })
+        );
     }
 
     #[test]
     fn test_lookup_index_string_over_max_len_is_an_error() {
         let at_spec = json!({ "a": { "@(1,arr[@(1,i)])": "out" } });
-        let output = run(at_spec.clone(), json!({ "a": {}, "arr": [10, 20], "i": "1" })).unwrap();
+        let output = run(
+            at_spec.clone(),
+            json!({ "a": {}, "arr": [10, 20], "i": "1" }),
+        )
+        .unwrap();
         assert_eq!(output, json!({ "out": 20 }));
 
-        let from_at = run(at_spec, json!({ "a": {}, "arr": [10, 20], "i": long_index(MAX_INDEX_LEN + 1) }));
-        assert!(matches!(from_at, Err(Error::IndexTooLong { .. })), "got {:?}", from_at);
+        let from_at = run(
+            at_spec,
+            json!({ "a": {}, "arr": [10, 20], "i": long_index(MAX_INDEX_LEN + 1) }),
+        );
+        assert!(
+            matches!(from_at, Err(Error::IndexTooLong { .. })),
+            "got {:?}",
+            from_at
+        );
 
         let amp_spec = json!({ "k*": { "@(1,arr[&(0,1)])": "out" } });
         let output = run(amp_spec.clone(), json!({ "k1": {}, "arr": [10, 20] })).unwrap();
@@ -804,20 +881,36 @@ mod test {
 
         let key = format!("k{}", long_index(MAX_INDEX_LEN + 1));
         let from_amp = run(amp_spec, json!({ key: {}, "arr": [10, 20] }));
-        assert!(matches!(from_amp, Err(Error::IndexTooLong { .. })), "got {:?}", from_amp);
+        assert!(
+            matches!(from_amp, Err(Error::IndexTooLong { .. })),
+            "got {:?}",
+            from_amp
+        );
     }
 
     #[test]
     fn test_long_ancestor_index_string_fails_fast() {
-        let children: serde_json::Map<String, Value> = (0..10_000).map(|i| (i.to_string(), json!(i))).collect();
-        let result = run(json!({ "*": { "*": "out[&1]" } }), json!({ long_index(100_000): children }));
-        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
+        let children: serde_json::Map<String, Value> =
+            (0..10_000).map(|i| (i.to_string(), json!(i))).collect();
+        let result = run(
+            json!({ "*": { "*": "out[&1]" } }),
+            json!({ long_index(100_000): children }),
+        );
+        assert!(
+            matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })),
+            "got {:?}",
+            result
+        );
 
         let items: Vec<Value> = (0..10_000).map(|i| json!({ "v": i })).collect();
         let result = run(
             json!({ "items": { "*": { "v": "out[@(3,idx)]" } } }),
             json!({ "items": items, "idx": long_index(100_000) }),
         );
-        assert!(matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })), "got {:?}", result);
+        assert!(
+            matches!(result, Err(Error::IndexTooLong { len: 100_000, .. })),
+            "got {:?}",
+            result
+        );
     }
 }

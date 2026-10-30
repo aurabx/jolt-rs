@@ -369,7 +369,13 @@ mod tests {
         let modifier = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec);
         let result = modifier.apply(input).unwrap();
 
-        assert_eq!(result["temp"]["entry"]["0"]["resource"]["started"], json!("2000-01-01"));
-        assert_eq!(result["temp"]["entry"]["1"]["resource"]["started"], json!("2024-12-25"));
+        assert_eq!(
+            result["temp"]["entry"]["0"]["resource"]["started"],
+            json!("2000-01-01")
+        );
+        assert_eq!(
+            result["temp"]["entry"]["1"]["resource"]["started"],
+            json!("2024-12-25")
+        );
     }
 }

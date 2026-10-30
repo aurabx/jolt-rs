@@ -144,7 +144,10 @@ mod test {
         });
 
         let result = transform(source, &spec);
-        assert!(result.is_err(), "Expected error when using non-numeric key as array index");
+        assert!(
+            result.is_err(),
+            "Expected error when using non-numeric key as array index"
+        );
 
         let err_msg = result.unwrap_err().to_string();
         assert!(

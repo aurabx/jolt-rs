@@ -164,7 +164,10 @@ fn split(args: &[Value]) -> Result<Value> {
         scalar => value_to_string(scalar),
     };
 
-    let mut parts: Vec<&str> = s.split(separator.as_str()).take(MAX_SPLIT_PARTS + 1).collect();
+    let mut parts: Vec<&str> = s
+        .split(separator.as_str())
+        .take(MAX_SPLIT_PARTS + 1)
+        .collect();
     if parts.len() > MAX_SPLIT_PARTS {
         return Err(Error::FunctionArgumentError(format!(
             "split would produce more than {} parts",
@@ -257,7 +260,10 @@ mod tests {
 
     #[test]
     fn test_split_drops_trailing_empty_parts() {
-        assert_eq!(split(&[json!(","), json!("a,b,,")]).unwrap(), json!(["a", "b"]));
+        assert_eq!(
+            split(&[json!(","), json!("a,b,,")]).unwrap(),
+            json!(["a", "b"])
+        );
         assert_eq!(split(&[json!(","), json!(",")]).unwrap(), json!([]));
         assert_eq!(split(&[json!(","), json!(",a")]).unwrap(), json!(["", "a"]));
         assert_eq!(split(&[json!(","), json!("")]).unwrap(), json!([""]));
@@ -287,7 +293,10 @@ mod tests {
     fn test_split_scalars_are_split_as_text() {
         assert_eq!(split(&[json!("."), json!(1.5)]).unwrap(), json!(["1", "5"]));
         assert_eq!(split(&[json!(","), json!(12)]).unwrap(), json!(["12"]));
-        assert_eq!(split(&[json!("u"), json!(true)]).unwrap(), json!(["tr", "e"]));
+        assert_eq!(
+            split(&[json!("u"), json!(true)]).unwrap(),
+            json!(["tr", "e"])
+        );
     }
 
     #[test]
