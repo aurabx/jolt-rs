@@ -72,7 +72,7 @@ impl ModifierSpec {
             &root,
             &self.spec,
             context.as_ref(),
-            &[],
+            &mut Vec::new(),
             &mut budget,
         )?;
 
@@ -119,7 +119,8 @@ impl ModifierSpec {
         root: &Value,
         spec: &Value,
         context: Option<&Value>,
-        path: &[String],
+        // One shared stack, because copying it per element costs key length times element count
+        path: &mut Vec<String>,
         budget: &mut RunBudget,
     ) -> Result<()> {
         match spec {
@@ -155,9 +156,6 @@ impl ModifierSpec {
 
                             // Apply nested spec to each child
                             for child_key in target_keys {
-                                let mut new_path = path.to_vec();
-                                new_path.push(child_key.clone());
-
                                 // Get the child value
                                 let child_target =
                                     if target.is_array() {
@@ -170,9 +168,11 @@ impl ModifierSpec {
                                     };
 
                                 if let Some(child) = child_target {
+                                    path.push(child_key);
                                     self.apply_spec_to_value(
-                                        child, root, &value, context, &new_path, budget,
+                                        child, root, &value, context, path, budget,
                                     )?;
+                                    path.pop();
                                 }
                             }
                         }
@@ -211,9 +211,6 @@ impl ModifierSpec {
                         }
                         Value::Object(_) => {
                             // Nested spec, recurse
-                            let mut new_path = path.to_vec();
-                            new_path.push(key.clone());
-
                             if target.get(&key).is_none() {
                                 budget.charge_entry(target, &key, &Value::Object(Map::new()))?;
                             }
@@ -224,14 +221,16 @@ impl ModifierSpec {
                                 .entry(key.clone())
                                 .or_insert(Value::Object(Map::new()));
 
+                            path.push(key.clone());
                             self.apply_spec_to_value(
                                 nested_target,
                                 root,
                                 &value,
                                 context,
-                                &new_path,
+                                path,
                                 budget,
                             )?;
+                            path.pop();
                         }
                         _ => {
                             // Regular value, just copy it
@@ -364,7 +363,7 @@ mod tests {
                 &json!({}),
                 &modifier.spec,
                 None,
-                &[],
+                &mut Vec::new(),
                 &mut budget,
             )
             .unwrap();

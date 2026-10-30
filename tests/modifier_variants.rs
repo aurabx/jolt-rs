@@ -302,6 +302,25 @@ fn path_reference_from_inside_an_array_element_resolves_through_the_index() {
 }
 
 #[test]
+fn path_reference_is_correct_after_visiting_a_sibling() {
+    assert_all(
+        &ALL_NAMES,
+        json!({
+            "first": {"name": "one", "deep": {}},
+            "second": {"name": "two", "deep": {}}
+        }),
+        json!({
+            "first": {"deep": {"x": "=concat(@(2,name))"}},
+            "second": {"deep": {"x": "=concat(@(2,name))"}}
+        }),
+        json!({
+            "first": {"name": "one", "deep": {"x": "one"}},
+            "second": {"name": "two", "deep": {"x": "two"}}
+        }),
+    );
+}
+
+#[test]
 fn kept_value_does_not_run_its_function() {
     let spec = json!({"a": "=concat(@(1,missing))"});
     assert_all(
