@@ -422,9 +422,9 @@ A nested spec needs an object, or an array when it uses the `*` wildcard. When a
 
 A function does not run for a value that is kept, so a missing path there is not an error. A malformed function string can still be rejected.
 
-Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block in that case.
+Unlike Java JOLT, a spec key other than `*` does not address an array index, and `[0]` is not supported. Next to a `*`, such a key is ignored on an array. Java skips the whole block for a literal key, and honours `[n]`.
 
-One modifier run may write about 64 MiB of output, estimated across every value it writes. Going over is a `ModifierOutputLimit` error.
+One modifier run may copy or write about 64 MiB, estimated across function arguments, function results and written values. Going over is a `ModifierBudgetLimit` error. The limit applies to each modifier operation in a spec separately.
 
 ### `Remove` operation
 Removes content from the input JSON.

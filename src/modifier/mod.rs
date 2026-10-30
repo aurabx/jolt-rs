@@ -1,3 +1,4 @@
+mod budget;
 mod function_parser;
 mod functions;
 mod evaluator;

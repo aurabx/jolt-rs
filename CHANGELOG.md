@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** the two rules also now match Java JOLT, which is the reverse of what earlier docs said. `modify-default-beta` writes when the key is absent or null. `modify-define-beta` writes only when the key is absent.
 - **Breaking:** under `modify-default-beta` and `modify-define-beta`, a nested spec no longer replaces an existing value of another type. A `null` is replaced under default and kept under define.
 - **Breaking:** the `*` wildcard now walks arrays under every modifier operation. It skips scalar elements. A spec key other than `*` next to it is ignored on an array.
-- **Breaking:** `Error` has a new `ModifierOutputLimit` variant. Exhaustive matches on it must handle it.
-- **Breaking:** one modifier run may write about 64 MiB of output, estimated across every value it writes. Going over is a `ModifierOutputLimit` error. A wildcard repeats its spec per element, so a small body could otherwise use gigabytes of memory.
+- **Breaking:** `Error` has a new `ModifierBudgetLimit` variant. Exhaustive matches on it must handle it.
+- **Breaking:** one modifier run may copy or write about 64 MiB, estimated across function arguments, function results and written values. Going over is a `ModifierBudgetLimit` error. A wildcard repeats its spec per element, so a small body could otherwise use gigabytes of memory or minutes of CPU. A large transform that used to succeed can now hit this limit.
 - `modify-default-beta` and `modify-define-beta` no longer run a function for a value they keep, so a missing path there is not an error.
 
 ### Fixed

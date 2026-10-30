@@ -3,52 +3,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use super::function_parser::FunctionCall;
 use super::functions::execute_function;
+use super::budget::RunBudget;
 use super::evaluator::evaluate_arg;
-
-/// Upper bound on the estimated bytes one modifier run writes. A wildcard repeats its spec for
-/// every element, so a small body can otherwise multiply a large value many thousands of times.
-const MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
-
-/// Estimated memory cost of a JSON value, on top of its text.
-const VALUE_OVERHEAD_BYTES: usize = 32;
-
-// Tracks the output written by one modifier run. See `MAX_OUTPUT_BYTES`.
-#[derive(Default)]
-struct OutputBudget {
-    used: usize,
-}
-
-impl OutputBudget {
-    fn charge(&mut self, key: &str, value: &Value) -> Result<()> {
-        let used = self
-            .used
-            .saturating_add(key.len())
-            .saturating_add(estimated_size(value));
-        if used > MAX_OUTPUT_BYTES {
-            return Err(Error::ModifierOutputLimit {
-                used,
-                max: MAX_OUTPUT_BYTES,
-            });
-        }
-        self.used = used;
-        Ok(())
-    }
-}
-
-fn estimated_size(value: &Value) -> usize {
-    let content = match value {
-        Value::String(s) => s.len(),
-        Value::Array(items) => items.iter().fold(0, |sum: usize, item| {
-            sum.saturating_add(estimated_size(item))
-        }),
-        Value::Object(map) => map.iter().fold(0, |sum: usize, (key, item)| {
-            sum.saturating_add(key.len())
-                .saturating_add(estimated_size(item))
-        }),
-        _ => 0,
-    };
-    content.saturating_add(VALUE_OVERHEAD_BYTES)
-}
 
 /// Modifier operation variant
 ///
@@ -110,7 +66,7 @@ impl ModifierSpec {
         let root = input.clone();
 
         // Apply the spec recursively
-        let mut budget = OutputBudget::default();
+        let mut budget = RunBudget::default();
         self.apply_spec_to_value(
             &mut input,
             &root,
@@ -164,7 +120,7 @@ impl ModifierSpec {
         spec: &Value,
         context: Option<&Value>,
         path: &[String],
-        budget: &mut OutputBudget,
+        budget: &mut RunBudget,
     ) -> Result<()> {
         match spec {
             Value::Object(spec_map) => {
@@ -174,6 +130,7 @@ impl ModifierSpec {
                     if !self.should_replace_with_object(target) {
                         return Ok(());
                     }
+                    budget.charge_value(&Value::Object(Map::new()))?;
                     *target = Value::Object(Map::new());
                 }
 
@@ -240,13 +197,14 @@ impl ModifierSpec {
                             // Evaluate all arguments
                             let mut evaluated_args = Vec::new();
                             for arg in &function_call.args {
-                                let evaluated = evaluate_arg(arg, target, root, context, path)?;
+                                let evaluated =
+                                    evaluate_arg(arg, target, root, context, path, budget)?;
                                 evaluated_args.push(evaluated);
                             }
 
                             // Execute the function
                             let result = execute_function(&function_call.name, &evaluated_args)?;
-                            budget.charge(&key, &result)?;
+                            budget.charge_entry(target, &key, &result)?;
 
                             let target_map = target.as_object_mut().unwrap();
                             target_map.insert(key.clone(), result);
@@ -255,6 +213,10 @@ impl ModifierSpec {
                             // Nested spec, recurse
                             let mut new_path = path.to_vec();
                             new_path.push(key.clone());
+
+                            if target.get(&key).is_none() {
+                                budget.charge_entry(target, &key, &Value::Object(Map::new()))?;
+                            }
 
                             // Get or create the nested value
                             let target_map = target.as_object_mut().unwrap();
@@ -274,7 +236,7 @@ impl ModifierSpec {
                         _ => {
                             // Regular value, just copy it
                             if self.should_write(target, &key) {
-                                budget.charge(&key, &value)?;
+                                budget.charge_entry(target, &key, &value)?;
                                 let target_map = target.as_object_mut().unwrap();
                                 target_map.insert(key.clone(), value.clone());
                             }
@@ -313,11 +275,12 @@ impl<'de> Deserialize<'de> for ModifierSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::budget::MAX_RUN_BYTES;
     use serde_json::json;
 
     #[test]
-    fn test_output_budget_stops_wildcard_amplification() {
-        let elements = (MAX_OUTPUT_BYTES / 50_000) + 1;
+    fn test_budget_stops_wildcard_amplification() {
+        let elements = (MAX_RUN_BYTES / 50_000) + 1;
         let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); elements] });
         let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
 
@@ -326,8 +289,8 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(Error::ModifierOutputLimit {
-                    max: MAX_OUTPUT_BYTES,
+                Err(Error::ModifierBudgetLimit {
+                    max: MAX_RUN_BYTES,
                     ..
                 })
             ),
@@ -336,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_budget_allows_output_under_the_limit() {
+    fn test_budget_allows_output_under_the_limit() {
         let input = json!({ "name": "x".repeat(50_000), "items": vec![json!({}); 100] });
         let spec = json!({ "items": { "*": { "x": "=concat(@(3,name))" } } });
 
@@ -348,8 +311,50 @@ mod tests {
     }
 
     #[test]
+    fn test_budget_charges_arguments_when_the_result_is_small() {
+        let elements = (MAX_RUN_BYTES / 500_000) + 1;
+        let input = json!({ "date": "x".repeat(500_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "y": "=substring(@(3,date),0,4)" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_nested_function_arguments() {
+        let elements = (MAX_RUN_BYTES / 500_000) + 1;
+        let input = json!({ "date": "x".repeat(500_000), "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "y": "=substring(=trim(@(3,date)),0,4)" } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_charges_created_parent_objects() {
+        let elements = MAX_RUN_BYTES / 1_000;
+        let input = json!({ "items": vec![json!({}); elements] });
+        let spec = json!({ "items": { "*": { "m": { "n": { "o": {} } } } } });
+
+        let result = ModifierSpec::new(ModifierVariant::OverwriteBeta, spec).apply(input);
+
+        assert!(
+            matches!(result, Err(Error::ModifierBudgetLimit { .. })),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
     fn test_kept_value_is_not_charged() {
-        let mut budget = OutputBudget::default();
+        let mut budget = RunBudget::default();
         let modifier = ModifierSpec::new(ModifierVariant::DefineBeta, json!({ "a": "new" }));
         let mut target = json!({ "a": "old" });
 

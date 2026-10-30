@@ -1,5 +1,6 @@
 use crate::{Error, Result};
 use serde_json::Value;
+use super::budget::RunBudget;
 use super::function_parser::{FunctionArg, PathExpr, FunctionCall};
 use super::functions::execute_function;
 
@@ -10,19 +11,22 @@ pub fn evaluate_arg(
     root: &Value,
     context: Option<&Value>,
     path_stack: &[String],
+    budget: &mut RunBudget,
 ) -> Result<Value> {
     match arg {
         FunctionArg::Literal(s) => Ok(Value::String(s.clone())),
         FunctionArg::Number(n) => Ok(Value::Number((*n).into())),
         FunctionArg::PathExpr(path_expr) => {
-            evaluate_path_expr(path_expr, current, root, path_stack)
+            evaluate_path_expr(path_expr, current, root, path_stack, budget)
         }
         FunctionArg::ContextRef(key) => {
             // Context references like ^value look up in the context object
             if let Some(ctx) = context {
-                ctx.get(key).cloned().ok_or_else(|| {
+                let value = ctx.get(key).ok_or_else(|| {
                     Error::PathEvaluationError(format!("Context key not found: {}", key))
-                })
+                })?;
+                budget.charge_value(value)?;
+                Ok(value.clone())
             } else {
                 Err(Error::PathEvaluationError(
                     "No context provided".to_string(),
@@ -31,14 +35,17 @@ pub fn evaluate_arg(
         }
         FunctionArg::Identifier(ident) => {
             // Try to look up as a path in current
-            Ok(current
-                .get(ident)
-                .cloned()
-                .unwrap_or(Value::String(ident.clone())))
+            match current.get(ident) {
+                Some(value) => {
+                    budget.charge_value(value)?;
+                    Ok(value.clone())
+                }
+                None => Ok(Value::String(ident.clone())),
+            }
         }
         FunctionArg::Function(nested_call) => {
             // Recursively evaluate nested function call
-            evaluate_function_call(nested_call, current, root, context, path_stack)
+            evaluate_function_call(nested_call, current, root, context, path_stack, budget)
         }
     }
 }
@@ -50,16 +57,19 @@ fn evaluate_function_call(
     root: &Value,
     context: Option<&Value>,
     path_stack: &[String],
+    budget: &mut RunBudget,
 ) -> Result<Value> {
     // Evaluate all arguments first
     let mut evaluated_args = Vec::new();
     for arg in &call.args {
-        let evaluated = evaluate_arg(arg, current, root, context, path_stack)?;
+        let evaluated = evaluate_arg(arg, current, root, context, path_stack, budget)?;
         evaluated_args.push(evaluated);
     }
 
     // Execute the nested function with evaluated arguments
-    execute_function(&call.name, &evaluated_args)
+    let result = execute_function(&call.name, &evaluated_args)?;
+    budget.charge_value(&result)?;
+    Ok(result)
 }
 
 /// Walk exact path segments from `base`. Segments can come from body keys, so they are never
@@ -84,6 +94,7 @@ fn evaluate_path_expr(
     current: &Value,
     root: &Value,
     path_stack: &[String],
+    budget: &mut RunBudget,
 ) -> Result<Value> {
     // Get the base value by going up `level` levels
     let base = if path_expr.level == 0 {
@@ -108,11 +119,14 @@ fn evaluate_path_expr(
     };
 
     // Navigate the path
-    if path_expr.path.is_empty() {
-        return Ok(base.clone());
-    }
+    let value = if path_expr.path.is_empty() {
+        base
+    } else {
+        navigate_path(base, &path_expr.path)?
+    };
 
-    navigate_path(base, &path_expr.path).cloned()
+    budget.charge_value(value)?;
+    Ok(value.clone())
 }
 
 /// Get a child by key. An array takes the key as an index, because wildcard walks record

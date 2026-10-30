@@ -264,12 +264,12 @@ fn hostile_body_key_does_not_panic() {
 // Each element used to clone its whole ancestor, so this size took many minutes.
 #[test]
 fn ancestor_reference_over_a_large_array_is_linear() {
-    let input = json!({"list": vec![json!({}); 200_000], "name": "n"});
+    let input = json!({"list": vec![json!({}); 40_000], "name": "n"});
     let spec = json!({"list": {"*": {"s": {"x": "=concat(@(4,name))"}}}});
 
     let result = run("modify", input, spec);
 
-    assert_eq!(result["list"][199_999]["s"]["x"], json!("n"));
+    assert_eq!(result["list"][39_999]["s"]["x"], json!("n"));
 }
 
 #[test]
