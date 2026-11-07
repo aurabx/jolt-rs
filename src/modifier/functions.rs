@@ -1,3 +1,4 @@
+use crate::error::json_kind;
 use crate::{Error, Result};
 use serde_json::Value;
 
@@ -156,10 +157,11 @@ fn split(args: &[Value]) -> Result<Value> {
     let s = match &args[1] {
         Value::Null => return Ok(Value::Null),
         Value::Array(_) | Value::Object(_) => {
+            // Name only the type: the value comes from the request body, and callers log it.
             return Err(Error::FunctionArgumentError(format!(
                 "split expects a string to split, got {}",
-                args[1]
-            )))
+                json_kind(&args[1])
+            )));
         }
         scalar => value_to_string(scalar),
     };
@@ -208,6 +210,24 @@ fn value_to_string(value: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_split_error_names_only_the_argument_kind() {
+        for (value, kind) in [
+            (json!({ "secret": "PHI-SECRET" }), "object"),
+            (json!(["PHI-SECRET"]), "array"),
+        ] {
+            let err = split(&[json!(","), value]).unwrap_err();
+            let message = err.to_string();
+
+            assert!(message.ends_with(kind), "got {message}");
+            assert!(!message.contains("PHI-SECRET"), "Display leaked: {message}");
+            assert!(
+                !format!("{err:?}").contains("PHI-SECRET"),
+                "Debug leaked: {err:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_concat() {

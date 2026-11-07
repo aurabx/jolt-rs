@@ -1,5 +1,5 @@
 use thiserror::Error as ThisError;
-use std::{result::Result as StdResult, num::ParseIntError};
+use std::{fmt, result::Result as StdResult, num::ParseIntError};
 
 #[derive(Debug, ThisError)]
 pub enum Error {
@@ -15,9 +15,11 @@ pub enum Error {
     UnexpectedObjectInRhs,
     #[error("Not implemented yet.")]
     Todo,
-    #[error("Invalid index in expression: {raw}\n{source}")]
+    /// Holds only the length of the index string. The string is a matched key or a value from
+    /// the request body, and callers log these errors.
+    #[error("Invalid index in expression. Length={len};\n{source}")]
     InvalidIndex {
-        raw: String,
+        len: usize,
         #[source]
         source: ParseIntError,
     },
@@ -36,10 +38,12 @@ pub enum Error {
     ModifierBudgetLimit { used: usize, max: usize },
     #[error("Array index string is too long. Length={len};Max={max};")]
     IndexTooLong { len: usize, max: usize },
-    #[error("Json value can't be used as an index: {0:?}")]
-    InvalidIndexVal(serde_json::Value),
+    /// Holds only the kind of the value, such as "object" or "number (negative)". The value
+    /// comes from the request body, and callers log these errors.
+    #[error("Json value can't be used as an index: {kind}")]
+    InvalidIndexVal { kind: &'static str },
     #[error("Key not found in object:{0}")]
-    KeyNotFound(String),
+    KeyNotFound(MissingKey),
     #[error("Expression didn't evaluate to a string.")]
     EvalString,
     #[error("Empty path while executing shift. THIS SHOULD NEVER HAPPEN.")]
@@ -57,3 +61,37 @@ pub enum Error {
 }
 
 pub type Result<T> = StdResult<T, Error>;
+
+/// The key named in an [`Error::KeyNotFound`].
+///
+/// A key written in the spec is kept so spec mistakes are easy to find. A key built from the
+/// request body, through `&` or `@`, is reduced to its length. Callers log these errors, and the
+/// body may hold personal data of any size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingKey {
+    Spec(String),
+    FromInput { len: usize },
+}
+
+impl fmt::Display for MissingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MissingKey::Spec(key) => f.write_str(key),
+            MissingKey::FromInput { len } => write!(f, "<key from input, {len} bytes>"),
+        }
+    }
+}
+
+/// Name the JSON type of a value, for error messages that must not contain the value.
+pub(crate) fn json_kind(v: &serde_json::Value) -> &'static str {
+    use serde_json::Value;
+
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}

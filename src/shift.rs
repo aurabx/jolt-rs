@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::dsl::{Object, REntry, InfallibleLhs, Rhs, RhsEntry, IndexOp, RhsPart};
 use crate::transform::Transform;
+use crate::error::{json_kind, MissingKey};
 use crate::{Error, Result};
 
 const ROOT_KEY: &str = "root";
@@ -282,11 +283,13 @@ fn lookup_rhs<'v>(
                     key += cow.as_ref();
                 }
 
-                v = key_into_object(v, &key)?;
+                let from_spec = entries.iter().all(|e| matches!(e, RhsEntry::Key(_)));
+                v = key_into_object(v, &key, from_spec)?;
             }
             RhsPart::Key(entry) => {
                 let cow = rhs_entry_to_cow(entry, path)?;
-                v = key_into_object(v, cow.as_ref())?;
+                let from_spec = matches!(entry, RhsEntry::Key(_));
+                v = key_into_object(v, cow.as_ref(), from_spec)?;
             }
         }
     }
@@ -300,7 +303,8 @@ fn lookup_rhs<'v>(
 const MAX_INDEX_LEN: usize = 20;
 
 // Parse an array index taken from a match or an input value.
-// Rejects over-length strings before parsing, and leaves them out of the error.
+// Rejects over-length strings before parsing. No error holds the string itself, because it comes
+// from the request body.
 fn parse_index(raw: &str) -> Result<usize> {
     if raw.len() > MAX_INDEX_LEN {
         return Err(Error::IndexTooLong {
@@ -310,20 +314,43 @@ fn parse_index(raw: &str) -> Result<usize> {
     }
 
     raw.parse().map_err(|e| Error::InvalidIndex {
-        raw: raw.to_owned(),
+        len: raw.len(),
         source: e,
     })
 }
 
 // Turn the value an `[@(...)]` expression points at into an array index.
+// The error names only the kind of value, because the value comes from the request body.
 fn index_from_value(v: &Value) -> Result<usize> {
     match v {
-        Value::Number(n) => n
-            .as_u64()
-            .and_then(|n| usize::try_from(n).ok())
-            .ok_or_else(|| Error::InvalidIndexVal(Value::Number(n.clone()))),
+        Value::Number(n) => {
+            n.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or(Error::InvalidIndexVal {
+                    kind: number_kind(n),
+                })
+        }
         Value::String(s) => parse_index(s),
-        v => Err(Error::InvalidIndexVal(v.clone())),
+        v => Err(Error::InvalidIndexVal { kind: json_kind(v) }),
+    }
+}
+
+// Say why a number is not a valid array index, without printing it.
+// Without serde_json's `arbitrary_precision` feature, an integer outside the u64 and i64 ranges is
+// parsed as an f64, so the float value decides the label.
+fn number_kind(n: &serde_json::Number) -> &'static str {
+    // 2^64, the first value above u64::MAX.
+    const U64_LIMIT: f64 = 18_446_744_073_709_551_616.0;
+
+    if n.is_u64() {
+        // Fits u64 but not usize, which only happens on targets narrower than 64 bits.
+        return "number (too large)";
+    }
+
+    match n.as_f64() {
+        Some(f) if f < 0.0 => "number (negative)",
+        Some(f) if f >= U64_LIMIT => "number (too large)",
+        _ => "number (not an integer)",
     }
 }
 
@@ -355,14 +382,16 @@ fn rhs_entry_to_cow<'ctx, 'input: 'ctx>(
     Ok(cow)
 }
 
-// index into an object using a given key
-// errors if key is not found
-fn key_into_object<'input>(v: &'input Value, key: &str) -> Result<&'input Value> {
+// Index into an object using a given key, and fail if the key is absent.
+// `from_spec` says whether every part of the key was written in the spec. A key built from the
+// request body is left out of the error, because callers log it.
+fn key_into_object<'input>(v: &'input Value, key: &str, from_spec: bool) -> Result<&'input Value> {
     let obj = v.as_object().ok_or(Error::UnexpectedRhsEntry)?;
 
     match obj.get(key) {
         Some(v) => Ok(v),
-        None => Err(Error::KeyNotFound(key.to_owned())),
+        None if from_spec => Err(Error::KeyNotFound(MissingKey::Spec(key.to_owned()))),
+        None => Err(Error::KeyNotFound(MissingKey::FromInput { len: key.len() })),
     }
 }
 
@@ -561,6 +590,138 @@ mod test {
     fn run(spec: Value, input: Value) -> Result<Value> {
         let shift: Shift = serde_json::from_value(spec).expect("parsed spec");
         shift.apply(&input)
+    }
+
+    // Errors from these lookups are logged by callers, so they must not repeat body data.
+    fn assert_no_secret(err: &Error) {
+        assert!(
+            !format!("{err}").contains("PHI-SECRET"),
+            "Display leaked: {err}"
+        );
+        assert!(
+            !format!("{err:?}").contains("PHI-SECRET"),
+            "Debug leaked: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_index_value_names_only_the_object_kind() {
+        let err = run(
+            json!({ "a": "out[@(1,x)]" }),
+            json!({ "a": 1, "x": { "secret": "PHI-SECRET" } }),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, Error::InvalidIndexVal { kind: "object" }),
+            "got {:?}",
+            err
+        );
+        assert_no_secret(&err);
+    }
+
+    #[test]
+    fn test_invalid_index_value_names_each_kind() {
+        let cases = [
+            (json!(["PHI-SECRET"]), "array"),
+            (json!(true), "boolean"),
+            (json!(null), "null"),
+            (json!(-3), "number (negative)"),
+            (json!(1.5), "number (not an integer)"),
+            (json!(1e20), "number (too large)"),
+            (json!(-1e20), "number (negative)"),
+        ];
+
+        for (x, expected) in cases {
+            let err = run(json!({ "a": "out[@(1,x)]" }), json!({ "a": 1, "x": x })).unwrap_err();
+
+            assert!(
+                matches!(err, Error::InvalidIndexVal { kind } if kind == expected),
+                "x={x}: got {err:?}"
+            );
+            assert_no_secret(&err);
+        }
+    }
+
+    #[test]
+    fn test_missing_key_built_from_input_reports_only_its_length() {
+        let err = run(
+            json!({ "*": { "v": "out[@(2,lookup.&1)]" } }),
+            json!({ "PHI-SECRET": { "v": 1 }, "lookup": {} }),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, Error::KeyNotFound(MissingKey::FromInput { len: 10 })),
+            "got {:?}",
+            err
+        );
+        assert_no_secret(&err);
+    }
+
+    #[test]
+    fn test_missing_key_with_any_input_part_reports_only_its_length() {
+        let cases = [
+            // A composite key that mixes spec text with a matched input key.
+            (
+                json!({ "*": { "v": "out[@(2,lookup.pre&1)]" } }),
+                json!({ "PHI-SECRET": { "v": 1 }, "lookup": {} }),
+                13,
+            ),
+            // A key read from an input value.
+            (
+                json!({ "a": "out[@(1,lookup.@(1,k))]" }),
+                json!({ "a": 1, "k": "PHI-SECRET", "lookup": {} }),
+                10,
+            ),
+        ];
+
+        for (spec, input, expected) in cases {
+            let err = run(spec.clone(), input).unwrap_err();
+
+            assert!(
+                matches!(err, Error::KeyNotFound(MissingKey::FromInput { len }) if len == expected),
+                "spec={spec}: got {err:?}"
+            );
+            assert_no_secret(&err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_index_string_reports_only_its_length() {
+        let cases = [
+            (
+                json!({ "a": "out[@(1,x)]" }),
+                json!({ "a": 1, "x": "PHI-SECRET" }),
+            ),
+            (json!({ "*": "out[&0]" }), json!({ "PHI-SECRET": 1 })),
+        ];
+
+        for (spec, input) in cases {
+            let err = run(spec.clone(), input).unwrap_err();
+
+            assert!(
+                matches!(err, Error::InvalidIndex { len: 10, .. }),
+                "spec={spec}: got {err:?}"
+            );
+            assert_no_secret(&err);
+        }
+    }
+
+    #[test]
+    fn test_missing_key_written_in_spec_is_named() {
+        let err = run(
+            json!({ "a": "out[@(1,lookup.missing)]" }),
+            json!({ "a": 1, "lookup": {} }),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&err, Error::KeyNotFound(MissingKey::Spec(key)) if key == "missing"),
+            "got {:?}",
+            err
+        );
+        assert_eq!(err.to_string(), "Key not found in object:missing");
     }
 
     #[test]
