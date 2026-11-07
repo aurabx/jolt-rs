@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-08
+
+Upgrade note: this release changes how `modify-default-beta`, `modify-define-beta` and the `*` wildcard behave in modifier specs, and adds a per-run modifier budget. Test your modifier specs against real inputs before you upgrade. The entries marked **Breaking** list each change.
+
 ### Changed
 - **Breaking:** `modify-default-beta` and `modify-define-beta` now follow their own write rules. Both used to behave like `modify-overwrite-beta`, so specs that relied on overwriting existing values will now keep them. Use `modify-overwrite-beta` to overwrite (AURA-2604).
 - **Breaking:** the two rules also now match Java JOLT, which is the reverse of what earlier docs said. `modify-default-beta` writes when the key is absent or null. `modify-define-beta` writes only when the key is absent.
