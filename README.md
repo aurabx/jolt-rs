@@ -288,6 +288,19 @@ An index taken from a string, such as a key for `[&0]` or a string value for `[@
 at most 20 characters long. That is the number of digits in the largest index. A longer string
 fails with `Error::IndexTooLong`, even if it is a valid number with leading zeros.
 
+#### Copy limit
+
+Each `shift` run may spend about 64 MiB on data it copies from the input more than once. Going over
+fails with `Error::ShiftBudgetLimit`. Two things count against the limit:
+
+- A key built from the input through `&` or `@`, such as `&1` or `out.@(3,idx)`. Its length is
+  counted each time it is written or looked up, because each use hashes the whole key.
+- A value read through `@(n,...)` or `$n` with `n` of 1 or more. Its estimated size is counted
+  for each write. Under a wildcard these read an ancestor, so the value is copied once per child.
+
+Keys written in the spec, matched values, and values read through `@` or `$` at level 0 are not counted. Each input
+node is matched at most once per spec level, so their cost is bounded by the size of the input.
+
 See [java library docs here](https://github.com/bazaarvoice/jolt/blob/master/jolt-core/src/main/java/com/bazaarvoice/jolt/Shiftr.java).
 
 ### `Default` operation

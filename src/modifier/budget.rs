@@ -63,7 +63,8 @@ impl RunBudget {
     }
 }
 
-fn estimated_size(value: &Value) -> usize {
+/// Estimate the heap and inline bytes of `value`, as used by the run budgets.
+pub(crate) fn estimated_size(value: &Value) -> usize {
     let content = match value {
         Value::String(s) => s.len(),
         Value::Array(items) => items.iter().fold(0, |sum: usize, item| {

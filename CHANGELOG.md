@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `Error` has a new `ShiftBudgetLimit` variant. Exhaustive matches on it must handle it.
+- **Breaking:** one `shift` run may spend about 64 MiB on keys built from the body through `&` or `@`, and on values copied through `@(n,...)` or `$n` with `n` of 1 or more. Going over is a `ShiftBudgetLimit` error. Keys written in the spec, matched values and values read at level 0 are not counted. A large transform that used to succeed can now hit this limit (AURA-2570).
+
+### Fixed
+- A long string from the body could hold a `shift` worker for seconds, or use gigabytes of memory. A key read from an ancestor, such as `&1` or `@(3,idx)`, was copied and hashed once per child under a wildcard. A 1 MB key with 10,000 children took about 4 seconds. A value read from an ancestor, such as `@(2,big)`, was copied into the output once per child, so 10,000 children of a 1 MB value built about 10 GB. These now hit the copy limit within milliseconds. An `@` key is also no longer cloned before it is used (AURA-2570).
+
 ## [0.9.0] - 2026-11-08
 
 Upgrade note: this release changes how `modify-default-beta`, `modify-define-beta` and the `*` wildcard behave in modifier specs, and adds a per-run modifier budget. Test your modifier specs against real inputs before you upgrade. The entries marked **Breaking** list each change.
