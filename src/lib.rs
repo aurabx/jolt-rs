@@ -19,7 +19,7 @@ use crate::spec::SpecEntry;
 
 pub use spec::TransformSpec;
 
-pub use error::{Error, Result};
+pub use error::{Error, MissingKey, Result};
 
 /// Perform JSON to JSON transformation where the "specification" is a JSON.
 ///

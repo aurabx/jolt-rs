@@ -16,10 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** a modifier spec holding only `*` no longer creates a parent or replaces a value, as in Java JOLT. It used to leave `{}` in place of a null, absent or scalar value.
 - **Breaking:** `@(n,...)` is now an error when level `n` does not exist in the input. It used to read from the root instead, so the shape of a body could decide which object a path read.
 - **Breaking:** `Error` has a new `ModifierBudgetLimit` variant. Exhaustive matches on it must handle it.
+- **Breaking:** `Error::InvalidIndexVal` now holds `{ kind: &'static str }` instead of the JSON value, and `Error::KeyNotFound` now holds a `MissingKey`. A key written in the spec is still named. A key built from the body through `&` or `@` is reported by its length only (AURA-2571).
 - **Breaking:** one modifier run may copy or write about 64 MiB, estimated across function arguments, function results, written values and path lookups. Going over is a `ModifierBudgetLimit` error. A wildcard repeats its spec per element, so a small body could otherwise use gigabytes of memory or minutes of CPU. A large transform that used to succeed can now hit this limit.
 - `modify-default-beta` and `modify-define-beta` no longer run a function for a value they keep, so a missing path there is not an error.
 
 ### Fixed
+- Error messages no longer copy request body data. An `[@(...)]` index that pointed at an object, an array or another invalid value put the whole value into the error, and a `split` of an object or array did the same. A missing lookup key built from the body was printed in full. harmony-proxy logs these errors at ERROR, so one request could write megabytes of possibly personal data into the logs. The errors now name only the JSON type, or the key's length (AURA-2571).
 - A `*` wildcard in a modifier spec replaced an array with an empty object, which lost its data. This affected `modify` and `modify-overwrite-beta`.
 - Modifier paths can now step through array indexes, as in `@(1,items.0.name)`. Before, these paths failed with `Key not found`. Only canonical indexes match, so `+1` and `01` do not.
 - `@(n,...)` no longer clones the whole ancestor for each element. A wildcard over a large collection took quadratic time, which a small body could use to hold a worker for minutes.
