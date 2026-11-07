@@ -15,9 +15,11 @@ pub enum Error {
     UnexpectedObjectInRhs,
     #[error("Not implemented yet.")]
     Todo,
-    #[error("Invalid index in expression: {raw}\n{source}")]
+    /// Holds only the length of the index string. The string is a matched key or a value from
+    /// the request body, and callers log these errors.
+    #[error("Invalid index in expression. Length={len};\n{source}")]
     InvalidIndex {
-        raw: String,
+        len: usize,
         #[source]
         source: ParseIntError,
     },

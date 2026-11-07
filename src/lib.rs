@@ -126,9 +126,10 @@ mod test {
     }
 
     #[test]
-    fn test_invalid_array_index_error_includes_raw_value() {
+    fn test_invalid_array_index_error_omits_raw_value() {
         // Using wildcard LHS, the captured key (e.g. "not_numeric") is used as an array index in RHS via &(0,0)
-        // This should fail and the error should include the raw invalid value.
+        // This should fail. The error must not include the key, because it comes from the request
+        // body and callers log errors; it reports the key's length instead.
         let spec: TransformSpec = serde_json::from_value(json!(
             [
                 {
@@ -153,8 +154,13 @@ mod test {
 
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("not_numeric"),
-            "Error should include the invalid index value, got: {}",
+            !err_msg.contains("not_numeric"),
+            "Error should not include the invalid index value, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("Length=11;"),
+            "Error should report the index length, got: {}",
             err_msg
         );
         assert!(

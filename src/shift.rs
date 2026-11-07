@@ -303,7 +303,8 @@ fn lookup_rhs<'v>(
 const MAX_INDEX_LEN: usize = 20;
 
 // Parse an array index taken from a match or an input value.
-// Rejects over-length strings before parsing, and leaves them out of the error.
+// Rejects over-length strings before parsing. No error holds the string itself, because it comes
+// from the request body.
 fn parse_index(raw: &str) -> Result<usize> {
     if raw.len() > MAX_INDEX_LEN {
         return Err(Error::IndexTooLong {
@@ -313,7 +314,7 @@ fn parse_index(raw: &str) -> Result<usize> {
     }
 
     raw.parse().map_err(|e| Error::InvalidIndex {
-        raw: raw.to_owned(),
+        len: raw.len(),
         source: e,
     })
 }
@@ -335,13 +336,21 @@ fn index_from_value(v: &Value) -> Result<usize> {
 }
 
 // Say why a number is not a valid array index, without printing it.
+// Without serde_json's `arbitrary_precision` feature, an integer outside the u64 and i64 ranges is
+// parsed as an f64, so the float value decides the label.
 fn number_kind(n: &serde_json::Number) -> &'static str {
-    if n.as_i64().is_some_and(|i| i < 0) {
-        "number (negative)"
-    } else if n.is_f64() {
-        "number (not an integer)"
-    } else {
-        "number (too large)"
+    // 2^64, the first value above u64::MAX.
+    const U64_LIMIT: f64 = 18_446_744_073_709_551_616.0;
+
+    if n.is_u64() {
+        // Fits u64 but not usize, which only happens on targets narrower than 64 bits.
+        return "number (too large)";
+    }
+
+    match n.as_f64() {
+        Some(f) if f < 0.0 => "number (negative)",
+        Some(f) if f >= U64_LIMIT => "number (too large)",
+        _ => "number (not an integer)",
     }
 }
 
@@ -619,6 +628,8 @@ mod test {
             (json!(null), "null"),
             (json!(-3), "number (negative)"),
             (json!(1.5), "number (not an integer)"),
+            (json!(1e20), "number (too large)"),
+            (json!(-1e20), "number (negative)"),
         ];
 
         for (x, expected) in cases {
@@ -646,6 +657,55 @@ mod test {
             err
         );
         assert_no_secret(&err);
+    }
+
+    #[test]
+    fn test_missing_key_with_any_input_part_reports_only_its_length() {
+        let cases = [
+            // A composite key that mixes spec text with a matched input key.
+            (
+                json!({ "*": { "v": "out[@(2,lookup.pre&1)]" } }),
+                json!({ "PHI-SECRET": { "v": 1 }, "lookup": {} }),
+                13,
+            ),
+            // A key read from an input value.
+            (
+                json!({ "a": "out[@(1,lookup.@(1,k))]" }),
+                json!({ "a": 1, "k": "PHI-SECRET", "lookup": {} }),
+                10,
+            ),
+        ];
+
+        for (spec, input, expected) in cases {
+            let err = run(spec.clone(), input).unwrap_err();
+
+            assert!(
+                matches!(err, Error::KeyNotFound(MissingKey::FromInput { len }) if len == expected),
+                "spec={spec}: got {err:?}"
+            );
+            assert_no_secret(&err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_index_string_reports_only_its_length() {
+        let cases = [
+            (
+                json!({ "a": "out[@(1,x)]" }),
+                json!({ "a": 1, "x": "PHI-SECRET" }),
+            ),
+            (json!({ "*": "out[&0]" }), json!({ "PHI-SECRET": 1 })),
+        ];
+
+        for (spec, input) in cases {
+            let err = run(spec.clone(), input).unwrap_err();
+
+            assert!(
+                matches!(err, Error::InvalidIndex { len: 10, .. }),
+                "spec={spec}: got {err:?}"
+            );
+            assert_no_secret(&err);
+        }
     }
 
     #[test]
