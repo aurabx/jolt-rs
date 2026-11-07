@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::dsl::{Object, REntry, InfallibleLhs, Rhs, RhsEntry, IndexOp, RhsPart};
 use crate::transform::Transform;
 use crate::error::{json_kind, MissingKey};
+use crate::modifier::budget::estimated_size;
 use crate::{Error, Result};
 
 const ROOT_KEY: &str = "root";
@@ -18,28 +19,64 @@ const ROOT_KEY: &str = "root";
 // allowed; one slot more is an error. In-order writes (index == length) are free at any size.
 const MAX_ARRAY_PADDING: usize = 100_000;
 
-// Tracks the null padding spent by one `shift` run. See `MAX_ARRAY_PADDING`.
+// A key built from the input through `&` or `@` is hashed, and usually copied, each time it is
+// written or looked up. A value read through `@(n,...)` or `$n` with `n >= 1` comes from an
+// ancestor, so it is copied once for every child under a wildcard. Either way one long string can
+// cost children x length bytes of work or memory. So each `shift` run may spend at most this many
+// estimated bytes on such keys and values. Reaching the limit exactly is allowed.
+// Keys written in the spec, values matched in place, and `@`/`$` at level 0 are not charged:
+// each input node is matched at most once per spec level, so their total is bounded by the input.
+const MAX_COPIED_BYTES: usize = 64 * 1024 * 1024;
+
+// Tracks what one `shift` run spends. See `MAX_ARRAY_PADDING` and `MAX_COPIED_BYTES`.
 #[derive(Debug, Default)]
-struct PaddingBudget {
-    used: usize,
+struct RunBudget {
+    padded: usize,
+    copied: usize,
 }
 
-impl PaddingBudget {
+impl RunBudget {
     // Reserve the gap slots needed to write `idx` into an array of length `len`.
     // Fails without reserving anything when the run would go over the limit.
-    fn reserve(&mut self, idx: usize, len: usize) -> Result<()> {
+    fn reserve_padding(&mut self, idx: usize, len: usize) -> Result<()> {
         let gap = idx.saturating_sub(len);
-        let used = self.used.saturating_add(gap);
+        let used = self.padded.saturating_add(gap);
         if used > MAX_ARRAY_PADDING {
             return Err(Error::ArrayPaddingLimit {
                 idx,
                 len,
-                used: self.used,
+                used: self.padded,
                 max: MAX_ARRAY_PADDING,
             });
         }
-        self.used = used;
+        self.padded = used;
         Ok(())
+    }
+
+    // Charge `bytes` of copying or hashing. Call it before the work, so going over the limit
+    // costs nothing. Fails without charging anything when the run would go over the limit.
+    fn charge_copy(&mut self, bytes: usize) -> Result<()> {
+        let used = self.copied.saturating_add(bytes);
+        if used > MAX_COPIED_BYTES {
+            return Err(Error::ShiftBudgetLimit {
+                used,
+                max: MAX_COPIED_BYTES,
+            });
+        }
+        self.copied = used;
+        Ok(())
+    }
+
+    // Charge using `key` as an object key. A key written wholly in the spec is free.
+    fn charge_key(&mut self, key: &str, from_spec: bool) -> Result<()> {
+        self.charge_key_len(key.len(), from_spec)
+    }
+
+    fn charge_key_len(&mut self, len: usize, from_spec: bool) -> Result<()> {
+        if from_spec {
+            return Ok(());
+        }
+        self.charge_copy(len)
     }
 }
 
@@ -51,7 +88,7 @@ impl Transform for Shift {
         let mut path = vec![(vec![Cow::Borrowed(ROOT_KEY)], val)];
         let mut counts = vec![0];
 
-        let mut budget = PaddingBudget::default();
+        let mut budget = RunBudget::default();
 
         let mut out = Value::Null;
         apply(&self.0, &mut path, &mut counts, &mut budget, &mut out)?;
@@ -77,26 +114,48 @@ fn apply<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
-    budget: &mut PaddingBudget,
+    budget: &mut RunBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     let tip = path.last().ok_or(Error::ShiftEmptyPath)?.clone();
 
     for (lhs, rhs) in obj.infallible.iter() {
+        // The value is built once and moved into the last target, so it is copied once per target.
+        // The lookup still runs for an empty target list, so a bad path is still an error.
+        let writes = rhs.len();
         let v = match lhs {
             InfallibleLhs::DollarSign(idx0, idx1) => {
                 let s = get_match((*idx0, *idx1), path)?;
+                if writes == 0 {
+                    continue;
+                }
+                if *idx0 > 0 {
+                    budget.charge_copy(s.len().saturating_mul(writes))?;
+                }
                 Value::String(s.into())
             }
-            InfallibleLhs::At(idx, rhs) => eval_at((*idx, rhs), path)?,
+            InfallibleLhs::At(idx, at_rhs) => {
+                let found = lookup_at((*idx, at_rhs), path, budget)?;
+                if writes == 0 {
+                    continue;
+                }
+                if *idx > 0 {
+                    budget.charge_copy(estimated_size(found).saturating_mul(writes))?;
+                }
+                found.clone()
+            }
             InfallibleLhs::Square(lit) => Value::String(lit.clone()),
+        };
+        let Some((last, rest)) = rhs.split_last() else {
+            continue;
         };
 
         path.push(tip.clone());
         counts.push(0);
-        for rhs in rhs.iter() {
-            insert_val_to_rhs(rhs, v.clone(), path, counts, budget, out)?;
+        for target in rest {
+            insert_val_to_rhs(target, v.clone(), path, counts, budget, out)?;
         }
+        insert_val_to_rhs(last, v, path, counts, budget, out)?;
         counts.pop();
         path.pop().ok_or(Error::ShiftEmptyPath)?;
     }
@@ -152,7 +211,7 @@ fn match_obj_and_key<'ctx, 'input: 'ctx>(
     obj: &'input Object,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
-    budget: &mut PaddingBudget,
+    budget: &mut RunBudget,
     k: Cow<'input, str>,
     v: &'input Value,
     out: &'ctx mut Value,
@@ -210,7 +269,7 @@ fn apply_match<'ctx, 'input: 'ctx>(
     rhs: &'input REntry,
     path: &'ctx mut Vec<(Vec<Cow<'input, str>>, &'input Value)>,
     counts: &'ctx mut Vec<usize>,
-    budget: &mut PaddingBudget,
+    budget: &mut RunBudget,
     out: &'ctx mut Value,
 ) -> Result<()> {
     match rhs {
@@ -225,14 +284,13 @@ fn apply_match<'ctx, 'input: 'ctx>(
     }
 }
 
-// Evaluate an @ expression into a json value using the given path
-fn eval_at(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &Value)]) -> Result<Value> {
-    lookup_at(at, path).cloned()
-}
-
 // Find the value an @ expression points at, without copying it. Index expressions use this
 // so they can check a string's length before anything copies it.
-fn lookup_at<'v>(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &'v Value)]) -> Result<&'v Value> {
+fn lookup_at<'v>(
+    at: (usize, &Rhs),
+    path: &[(Vec<Cow<'_, str>>, &'v Value)],
+    budget: &mut RunBudget,
+) -> Result<&'v Value> {
     if at.0 >= path.len() {
         return Err(Error::PathIndexOutOfRange {
             idx: at.0,
@@ -242,7 +300,7 @@ fn lookup_at<'v>(at: (usize, &Rhs), path: &[(Vec<Cow<'_, str>>, &'v Value)]) -> 
 
     let v = path[path.len() - at.0 - 1].1;
 
-    lookup_rhs(at.1, v, path)
+    lookup_rhs(at.1, v, path, budget)
 }
 
 // Find the value a rhs expression points at inside `v`, using the given path
@@ -250,6 +308,7 @@ fn lookup_rhs<'v>(
     rhs: &Rhs,
     v: &'v Value,
     path: &[(Vec<Cow<'_, str>>, &Value)],
+    budget: &mut RunBudget,
 ) -> Result<&'v Value> {
     let mut v = v;
 
@@ -260,7 +319,9 @@ fn lookup_rhs<'v>(
                     let idx = match idx_op {
                         IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                         IndexOp::Literal(idx) => *idx,
-                        IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
+                        IndexOp::At(idx, rhs) => {
+                            index_from_value(lookup_at((*idx, rhs), path, budget)?)?
+                        }
                         // `#` only counts output matches, so it has no meaning in a lookup
                         IndexOp::Hash(_) | IndexOp::Empty => {
                             return Err(Error::UnexpectedRhsEntry);
@@ -276,19 +337,13 @@ fn lookup_rhs<'v>(
                 }
             },
             RhsPart::CompositeKey(entries) => {
-                let mut key = String::new();
-
-                for entry in entries {
-                    let cow = rhs_entry_to_cow(entry, path)?;
-                    key += cow.as_ref();
-                }
-
-                let from_spec = entries.iter().all(|e| matches!(e, RhsEntry::Key(_)));
+                let (key, from_spec) = composite_key(entries, path, budget)?;
                 v = key_into_object(v, &key, from_spec)?;
             }
             RhsPart::Key(entry) => {
-                let cow = rhs_entry_to_cow(entry, path)?;
+                let cow = rhs_entry_to_cow(entry, path, budget)?;
                 let from_spec = matches!(entry, RhsEntry::Key(_));
+                budget.charge_key(cow.as_ref(), from_spec)?;
                 v = key_into_object(v, cow.as_ref(), from_spec)?;
             }
         }
@@ -354,20 +409,22 @@ fn number_kind(n: &serde_json::Number) -> &'static str {
     }
 }
 
-// Evaluate a rhs expression into a string
+// Evaluate a rhs expression into a string. A string read through `@` is borrowed from the input,
+// because it may be long and this runs once per write.
 fn rhs_entry_to_cow<'ctx, 'input: 'ctx>(
     entry: &'input RhsEntry,
     path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
+    budget: &mut RunBudget,
 ) -> Result<Cow<'input, str>> {
     let cow = match entry {
         RhsEntry::Amp(idx0, idx1) => get_match((*idx0, *idx1), path)?,
         RhsEntry::At(idx, rhs) => {
-            let key = eval_at((*idx, rhs), path)?;
+            let key = lookup_at((*idx, rhs), path, budget)?;
             match key {
-                Value::String(s) => Cow::Owned(s),
+                Value::String(s) => Cow::Borrowed(s.as_str()),
                 Value::Number(n) => Cow::Owned(n.to_string()),
                 Value::Bool(b) => {
-                    if b {
+                    if *b {
                         Cow::Borrowed("true")
                     } else {
                         Cow::Borrowed("false")
@@ -380,6 +437,28 @@ fn rhs_entry_to_cow<'ctx, 'input: 'ctx>(
     };
 
     Ok(cow)
+}
+
+// Build a composite key such as `pre&1` and charge it to the budget before joining its parts.
+// Returns the key and whether every part was written in the spec.
+fn composite_key<'ctx, 'input: 'ctx>(
+    entries: &'input [RhsEntry],
+    path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
+    budget: &mut RunBudget,
+) -> Result<(String, bool)> {
+    let parts = entries
+        .iter()
+        .map(|entry| rhs_entry_to_cow(entry, path, budget))
+        .collect::<Result<Vec<_>>>()?;
+    let len = parts
+        .iter()
+        .fold(0, |sum: usize, part| sum.saturating_add(part.len()));
+
+    let from_spec = entries.iter().all(|e| matches!(e, RhsEntry::Key(_)));
+    // The joined key is hashed and copied once per write, whatever its parts cost to find.
+    budget.charge_key_len(len, from_spec)?;
+
+    Ok((parts.concat(), from_spec))
 }
 
 // Index into an object using a given key, and fail if the key is absent.
@@ -400,7 +479,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
     v: Value,
     path: &'ctx [(Vec<Cow<'input, str>>, &'input Value)],
     counts: &[usize],
-    budget: &mut PaddingBudget,
+    budget: &mut RunBudget,
     out: &mut Value,
 ) -> Result<()> {
     let mut out = out;
@@ -421,7 +500,9 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 let idx = match idx_op {
                     IndexOp::Amp(idx0, idx1) => parse_index(&get_match((*idx0, *idx1), path)?)?,
                     IndexOp::Literal(idx) => *idx,
-                    IndexOp::At(idx, rhs) => index_from_value(lookup_at((*idx, rhs), path)?)?,
+                    IndexOp::At(idx, rhs) => {
+                        index_from_value(lookup_at((*idx, rhs), path, budget)?)?
+                    }
                     IndexOp::Hash(level) => get_match_count(*level, counts)?,
                     IndexOp::Empty => {
                         arr.push(Value::Null);
@@ -431,7 +512,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 };
 
                 // Charge before pushing, so an index over the budget allocates nothing.
-                budget.reserve(idx, arr.len())?;
+                budget.reserve_padding(idx, arr.len())?;
                 while arr.len() <= idx {
                     arr.push(Value::Null);
                 }
@@ -439,12 +520,7 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                 out = arr.get_mut(idx).unwrap();
             }
             RhsPart::CompositeKey(entries) => {
-                let mut key = String::new();
-
-                for entry in entries {
-                    let cow = rhs_entry_to_cow(entry, path)?;
-                    key += cow.as_ref();
-                }
+                let (key, _) = composite_key(entries, path, budget)?;
 
                 let obj = if out.is_object() {
                     out.as_object_mut().unwrap()
@@ -453,10 +529,11 @@ fn insert_val_to_rhs<'ctx, 'input: 'ctx>(
                     out.as_object_mut().unwrap()
                 };
 
-                out = obj.entry(&key).or_insert(Value::Null);
+                out = obj.entry(key).or_insert(Value::Null);
             }
             RhsPart::Key(entry) => {
-                let cow = rhs_entry_to_cow(entry, path)?;
+                let cow = rhs_entry_to_cow(entry, path, budget)?;
+                budget.charge_key(cow.as_ref(), matches!(entry, RhsEntry::Key(_)))?;
                 let obj = if out.is_object() {
                     out.as_object_mut().unwrap()
                 } else {
@@ -1073,5 +1150,203 @@ mod test {
             "got {:?}",
             result
         );
+    }
+
+    const MIB: usize = 1024 * 1024;
+
+    // How many 1 MiB copies fit in the budget exactly.
+    const MIB_COPIES: usize = MAX_COPIED_BYTES / MIB;
+
+    fn numbered_children(count: usize) -> Value {
+        Value::Object((0..count).map(|i| (i.to_string(), json!(i))).collect())
+    }
+
+    fn numbered_items(count: usize) -> Value {
+        Value::Array((0..count).map(|i| json!({ "v": i })).collect())
+    }
+
+    fn assert_copy_limit(result: &Result<Value>) {
+        assert!(
+            matches!(
+                result,
+                Err(Error::ShiftBudgetLimit {
+                    max: MAX_COPIED_BYTES,
+                    ..
+                })
+            ),
+            "got {:?}",
+            result.as_ref().map(|_| "ok")
+        );
+    }
+
+    #[test]
+    fn test_ancestor_key_copies_are_bounded() {
+        let spec = json!({ "*": { "*": "&1[&0]" } });
+        let key = "k".repeat(MIB);
+
+        let output = run(
+            spec.clone(),
+            json!({ key.clone(): numbered_children(MIB_COPIES) }),
+        )
+        .unwrap();
+        assert_eq!(output[&key].as_array().unwrap().len(), MIB_COPIES);
+
+        let result = run(spec, json!({ key: numbered_children(MIB_COPIES + 1) }));
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_composite_ancestor_key_copies_are_bounded() {
+        let key = "k".repeat(MIB);
+        let result = run(
+            json!({ "*": { "*": "pre&1" } }),
+            json!({ key: numbered_children(MIB_COPIES + 1) }),
+        );
+
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_at_key_copies_are_bounded() {
+        let spec = json!({ "items": { "*": { "v": "out.@(3,idx)" } } });
+        let idx = "k".repeat(MIB);
+
+        let output = run(
+            spec.clone(),
+            json!({ "items": numbered_items(MIB_COPIES), "idx": idx.clone() }),
+        )
+        .unwrap();
+        assert_eq!(output["out"][&idx].as_array().unwrap().len(), MIB_COPIES);
+
+        let result = run(
+            spec,
+            json!({ "items": numbered_items(MIB_COPIES + 1), "idx": idx }),
+        );
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_lookup_keys_from_input_are_charged() {
+        let key = "k".repeat(MIB);
+        let result = run(
+            json!({ "data": { "*": { "*": { "@(3,lookup.&1)": "out[]" } } } }),
+            json!({
+                "data": { key.clone(): numbered_children(MIB_COPIES + 1) },
+                "lookup": { key: 1 }
+            }),
+        );
+
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_ancestor_at_value_copies_are_bounded() {
+        let spec = json!({ "items": { "*": { "@(2,big)": "out[]" } } });
+        let big = "v".repeat(MIB);
+
+        // Each copy is estimated a little over 1 MiB, so one fewer copy fits.
+        let output = run(
+            spec.clone(),
+            json!({ "items": numbered_items(MIB_COPIES - 1), "big": big.clone() }),
+        )
+        .unwrap();
+        assert_eq!(output["out"].as_array().unwrap().len(), MIB_COPIES - 1);
+
+        let result = run(
+            spec,
+            json!({ "items": numbered_items(MIB_COPIES), "big": big }),
+        );
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_ancestor_dollar_value_copies_are_bounded() {
+        let spec = json!({ "*": { "*": { "$1": "out[]" } } });
+        let key = "k".repeat(MIB);
+
+        let output = run(
+            spec.clone(),
+            json!({ key.clone(): numbered_children(MIB_COPIES) }),
+        )
+        .unwrap();
+        assert_eq!(output["out"].as_array().unwrap().len(), MIB_COPIES);
+
+        let result = run(spec, json!({ key: numbered_children(MIB_COPIES + 1) }));
+        assert_copy_limit(&result);
+    }
+
+    #[test]
+    fn test_level_zero_at_and_dollar_values_are_free() {
+        let big = "v".repeat(MAX_COPIED_BYTES + 1);
+
+        let output = run(json!({ "@": "data" }), json!({ "a": big.clone() })).unwrap();
+        assert_eq!(output["data"]["a"].as_str().map(str::len), Some(big.len()));
+
+        let output = run(json!({ "*": { "$": "keys[]" } }), json!({ big: 1 })).unwrap();
+        assert_eq!(
+            output["keys"][0].as_str().map(str::len),
+            Some(MAX_COPIED_BYTES + 1)
+        );
+    }
+
+    #[test]
+    fn test_copy_budget_resets_for_each_run() {
+        let shift: Shift =
+            serde_json::from_value(json!({ "*": { "*": "&1[&0]" } })).expect("parsed spec");
+        let input = json!({ "k".repeat(MIB): numbered_children(MIB_COPIES) });
+
+        assert!(shift.apply(&input).is_ok());
+        assert!(shift.apply(&input).is_ok());
+    }
+
+    #[test]
+    fn test_copy_limit_error_holds_no_body_data() {
+        let key = format!("PHI-SECRET{}", "k".repeat(MIB));
+        let err = run(
+            json!({ "*": { "*": "&1[&0]" } }),
+            json!({ key: numbered_children(MIB_COPIES + 1) }),
+        )
+        .unwrap_err();
+
+        assert_no_secret(&err);
+    }
+
+    #[test]
+    fn test_empty_target_list_writes_nothing_and_still_checks_the_path() {
+        let big = "v".repeat(MIB);
+        let output = run(
+            json!({ "items": { "*": { "@(2,big)": [], "$1": [] } } }),
+            json!({ "items": numbered_items(MIB_COPIES + 1), "big": big }),
+        )
+        .unwrap();
+        assert_eq!(output, Value::Null);
+
+        let result = run(json!({ "a": { "@(1,missing)": [] } }), json!({ "a": {} }));
+        assert!(
+            matches!(&result, Err(Error::KeyNotFound(MissingKey::Spec(key))) if key == "missing"),
+            "got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_ancestor_value_with_several_targets_is_charged_per_target() {
+        let spec = json!({ "items": { "*": { "@(2,big)": ["a[]", "b[]"] } } });
+        let big = "v".repeat(MIB);
+        let pairs = (MIB_COPIES - 1) / 2;
+
+        let output = run(
+            spec.clone(),
+            json!({ "items": numbered_items(pairs), "big": big.clone() }),
+        )
+        .unwrap();
+        assert_eq!(output["a"].as_array().unwrap().len(), pairs);
+        assert_eq!(output["b"].as_array().unwrap().len(), pairs);
+
+        let result = run(
+            spec,
+            json!({ "items": numbered_items(pairs + 1), "big": big }),
+        );
+        assert_copy_limit(&result);
     }
 }

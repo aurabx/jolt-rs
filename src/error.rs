@@ -36,6 +36,12 @@ pub enum Error {
         "Modifier run copied or wrote too much data. Used={used};Limit={max} estimated bytes per run;"
     )]
     ModifierBudgetLimit { used: usize, max: usize },
+    /// `used` is the total the run would have reached with the failed charge, as in
+    /// `ModifierBudgetLimit`. It is not what was spent before it.
+    #[error(
+        "Shift run copied too much data from the input. Used={used};Limit={max} estimated bytes per run;"
+    )]
+    ShiftBudgetLimit { used: usize, max: usize },
     #[error("Array index string is too long. Length={len};Max={max};")]
     IndexTooLong { len: usize, max: usize },
     /// Holds only the kind of the value, such as "object" or "number (negative)". The value
