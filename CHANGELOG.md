@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-08
+
+Upgrade note: this release adds a per-run copy budget to `shift`. Test large `shift` transforms against real inputs before you upgrade. The entries marked **Breaking** list each change.
+
 ### Changed
 - **Breaking:** `Error` has a new `ShiftBudgetLimit` variant. Exhaustive matches on it must handle it.
 - **Breaking:** one `shift` run may spend about 64 MiB on keys built from the body through `&` or `@`, and on values copied through `@(n,...)` or `$n` with `n` of 1 or more. Going over is a `ShiftBudgetLimit` error. Keys written in the spec, matched values and values read at level 0 are not counted. A large transform that used to succeed can now hit this limit (AURA-2570).
