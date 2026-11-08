@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A GitHub Actions workflow publishes the crate to crates.io when a version tag is pushed. It uses Trusted Publishing, so no crates.io token is stored. DEVELOPER.md describes the release steps.
+
 ## [0.10.0] - 2026-11-08
 
 Upgrade note: this release adds a per-run copy budget to `shift`. Test large `shift` transforms against real inputs before you upgrade. The entries marked **Breaking** list each change.

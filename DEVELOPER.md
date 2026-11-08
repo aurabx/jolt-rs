@@ -65,6 +65,40 @@ pub fn transform(input: Value, spec: &TransformSpec) -> Result<Value>
 - `tests/java/` holds tests ported from Java JOLT, with resources in `tests/java/resources/`.
 - Only `java::shift` runs by default. The `default`, `remove` and `cardinality` tests are `#[ignore]`d, and the `sort` module is commented out.
 
+## Releasing
+
+`.github/workflows/publish.yml` publishes the crate to crates.io when a version tag is pushed. It uses crates.io Trusted Publishing, so no crates.io token is stored in GitHub.
+
+1. Set the version in `Cargo.toml`, move the `[Unreleased]` changelog entries under it, and merge the release into `main`.
+2. Push `main`. Then add an annotated tag on the merge commit, named with the bare version, and push the tag. Tags have no `v` prefix.
+
+   ```bash
+   git push origin main
+   git tag -a 0.11.0 -m "0.11.0"
+   git push origin 0.11.0
+   ```
+
+   Push `main` first. If the tag reaches GitHub first, the run fails with "not on main" and publishes nothing. Re-run it once `main` is pushed.
+
+   Push one release tag at a time. GitHub keeps at most one waiting run, so a second tag pushed while a run waits for approval can cancel the waiting one. Re-run any cancelled run.
+
+3. Approve the run in the `release` environment. Every publish waits for this approval.
+
+The `verify` job stops the release if the tag differs from the `Cargo.toml` version, or if the tagged commit is not on `main`. It then runs `cargo test --locked` and `cargo publish --dry-run --locked`. The `publish` job runs only after approval. It holds the OIDC permission, builds nothing, and runs `cargo publish --locked --no-verify`. Dependency build scripts therefore never run while a publish token can be minted.
+
+A published version cannot be replaced. A bad release can only be yanked with `cargo yank`, then fixed by publishing a new version.
+
+### One-time setup
+
+The checks in the workflow are not a security boundary. A tag-push run uses the workflow file from the tagged commit, so anyone who can push a tag can edit them out. crates.io only checks that the token comes from this repository, `publish.yml` and the `release` environment. These settings are the boundary, and they must be in place before the first tag is pushed:
+
+1. On crates.io, open `harmony-jolt`, then Settings, then Trusted Publishing. Add a GitHub publisher with owner `aurabx`, repository `jolt-rs`, workflow `publish.yml` and environment `release`.
+2. In GitHub, go to Settings, then Environments, and create `release`:
+   - Add required reviewers. Turn on "Prevent self-review" only if at least two people can approve, or no one can approve a release they started.
+   - Set "Deployment branches and tags" to "Selected branches and tags", with one tag rule: `[0-9]*.[0-9]*.[0-9]*`. Add no branch rules, so a run from a branch can never use the environment.
+3. In GitHub, go to Settings, then Rules, then Rulesets. Add a tag ruleset for `[0-9]*.[0-9]*.[0-9]*` that limits creating, updating and deleting those tags to release maintainers.
+4. Protect `main`, so that the "tagged commit is on main" check means the code was reviewed.
+
 ## Crate details
 
 - The crate types are `cdylib` and `rlib`. The crate has no C API.
