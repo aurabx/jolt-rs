@@ -2,15 +2,38 @@ use crate::error::json_kind;
 use crate::{Error, Result};
 use serde_json::Value;
 
-/// Execute a function by name with given arguments
-pub fn execute_function(name: &str, args: &[Value]) -> Result<Value> {
+/// The names `execute_function` accepts.
+const FUNCTION_NAMES: [&str; 7] = [
+    "concat",
+    "toLower",
+    "toUpper",
+    "substring",
+    "trim",
+    "join",
+    "split",
+];
+
+/// Whether `name` is a function `execute_function` can run.
+pub fn is_known_function(name: &str) -> bool {
+    FUNCTION_NAMES.contains(&name)
+}
+
+/// Execute a function by name with given arguments.
+///
+/// `Ok(None)` means the call has no value, as Java JOLT's `Optional.empty()` does. The caller
+/// then leaves the key unwritten. A missing path reaches a function as `null`. As in Java,
+/// `null` as the only argument of `concat`, `toLower`, `toUpper` or `trim` has no value, and
+/// so does `null` as the string to `split`.
+pub fn execute_function(name: &str, args: &[Value]) -> Result<Option<Value>> {
+    let sole_null = matches!(args, [Value::Null]);
     match name {
-        "concat" => concat(args),
-        "toLower" => to_lower(args),
-        "toUpper" => to_upper(args),
-        "substring" => substring(args),
-        "trim" => trim(args),
-        "join" => join(args),
+        "concat" | "toLower" | "toUpper" | "trim" if sole_null => Ok(None),
+        "concat" => concat(args).map(Some),
+        "toLower" => to_lower(args).map(Some),
+        "toUpper" => to_upper(args).map(Some),
+        "substring" => Ok(substring(args)),
+        "trim" => trim(args).map(Some),
+        "join" => join(args).map(Some),
         "split" => split(args),
         _ => Err(Error::InvalidFunction(name.to_string())),
     }
@@ -53,49 +76,28 @@ fn to_upper(args: &[Value]) -> Result<Value> {
     Ok(Value::String(s.to_uppercase()))
 }
 
-/// Extract substring from a string
-fn substring(args: &[Value]) -> Result<Value> {
-    if args.len() != 3 {
-        return Err(Error::FunctionArgumentError(format!(
-            "substring expects 3 arguments (string, start, end), got {}",
-            args.len()
-        )));
+/// Take the characters of a string from `start` up to, but not including, `end`.
+///
+/// As in Java JOLT, a call that cannot produce a substring has no value, so its key is not
+/// written. That covers a wrong argument count, an input that is not a string, an index that
+/// is not a non-negative integer, and a range that is empty or runs past the end of the
+/// string. Indices count Unicode scalar values, where Java counts UTF-16 code units, so the
+/// two differ only for characters outside the Basic Multilingual Plane.
+fn substring(args: &[Value]) -> Option<Value> {
+    let [input, start, end] = args else {
+        return None;
+    };
+    let input = input.as_str()?;
+    let start = usize::try_from(start.as_i64()?).ok()?;
+    let end = usize::try_from(end.as_i64()?).ok()?;
+
+    if start >= end || end > input.chars().count() {
+        return None;
     }
 
-    let s = value_to_string(&args[0]);
-    let start = args[1]
-        .as_i64()
-        .ok_or_else(|| Error::FunctionArgumentError("start index must be a number".to_string()))?
-        as usize;
-    let end = args[2]
-        .as_i64()
-        .ok_or_else(|| Error::FunctionArgumentError("end index must be a number".to_string()))?
-        as usize;
-
-    // Validate indices
-    if start > end {
-        return Err(Error::FunctionArgumentError(format!(
-            "start index ({}) must be <= end index ({})",
-            start, end
-        )));
-    }
-
-    if end > s.len() {
-        return Err(Error::FunctionArgumentError(format!(
-            "end index ({}) is out of bounds (string length: {})",
-            end,
-            s.len()
-        )));
-    }
-
-    if start == end {
-        return Err(Error::FunctionArgumentError(
-            "start and end indices cannot be equal".to_string(),
-        ));
-    }
-
-    let result = s.chars().skip(start).take(end - start).collect::<String>();
-    Ok(Value::String(result))
+    Some(Value::String(
+        input.chars().skip(start).take(end - start).collect(),
+    ))
 }
 
 /// Trim whitespace from a string
@@ -139,7 +141,7 @@ const MAX_SPLIT_PARTS: usize = 100_000;
 /// Matches Java JOLT's `split(separator, string)` argument order, and like Java's `String.split`
 /// it drops trailing empty parts. Java treats the separator as a regular expression; here it is a
 /// plain string. A null input yields null, as in Java. Numbers and booleans are split as text.
-fn split(args: &[Value]) -> Result<Value> {
+fn split(args: &[Value]) -> Result<Option<Value>> {
     if args.len() != 2 {
         return Err(Error::FunctionArgumentError(format!(
             "split expects 2 arguments (separator, string), got {}",
@@ -155,7 +157,7 @@ fn split(args: &[Value]) -> Result<Value> {
     }
 
     let s = match &args[1] {
-        Value::Null => return Ok(Value::Null),
+        Value::Null => return Ok(None),
         Value::Array(_) | Value::Object(_) => {
             // Name only the type: the value comes from the request body, and callers log it.
             return Err(Error::FunctionArgumentError(format!(
@@ -183,12 +185,12 @@ fn split(args: &[Value]) -> Result<Value> {
         }
     }
 
-    Ok(Value::Array(
+    Ok(Some(Value::Array(
         parts
             .into_iter()
             .map(|part| Value::String(part.to_string()))
             .collect(),
-    ))
+    )))
 }
 
 /// Convert a JSON value to a string representation
@@ -258,6 +260,70 @@ mod tests {
     }
 
     #[test]
+    fn test_substring_reaches_the_last_character() {
+        let args = vec![json!("the quick brown fox"), json!(16), json!(19)];
+        assert_eq!(substring(&args), Some(json!("fox")));
+    }
+
+    /// The failing cases of Java JOLT's `stringsTests.json`. Each one has no value there.
+    #[test]
+    fn test_substring_has_no_value_where_java_jolt_has_none() {
+        let fox = json!("the quick brown fox");
+        let cases = [
+            ("negative start", vec![fox.clone(), json!(-4), json!(9)]),
+            (
+                "end far past the string",
+                vec![fox.clone(), json!(0), json!(200)],
+            ),
+            (
+                "end one past the string",
+                vec![fox.clone(), json!(0), json!(20)],
+            ),
+            ("input is a number", vec![json!(0), json!(4), json!(9)]),
+            (
+                "empty string, empty range",
+                vec![json!(""), json!(0), json!(0)],
+            ),
+            (
+                "start equals end at zero",
+                vec![json!("abc"), json!(0), json!(0)],
+            ),
+            ("start equals end", vec![json!("abc"), json!(1), json!(1)]),
+            ("start after end", vec![json!("abc"), json!(1), json!(0)]),
+            (
+                "too many arguments",
+                vec![json!("abc"), json!(0), json!(1), json!(2)],
+            ),
+            ("too few arguments", vec![json!("abc"), json!(0)]),
+        ];
+
+        for (name, args) in cases {
+            assert_eq!(substring(&args), None, "case: {name}");
+        }
+    }
+
+    #[test]
+    fn test_substring_of_an_empty_or_null_value_has_no_value() {
+        assert_eq!(substring(&[json!(""), json!(0), json!(4)]), None);
+        assert_eq!(substring(&[Value::Null, json!(0), json!(4)]), None);
+    }
+
+    #[test]
+    fn test_substring_counts_characters_not_bytes() {
+        assert_eq!(
+            substring(&[json!("é"), json!(0), json!(1)]),
+            Some(json!("é"))
+        );
+        assert_eq!(substring(&[json!("é"), json!(0), json!(2)]), None);
+    }
+
+    #[test]
+    fn test_substring_index_must_be_an_integer() {
+        assert_eq!(substring(&[json!("abc"), json!("0"), json!(2)]), None);
+        assert_eq!(substring(&[json!("abc"), json!(0), json!(1.5)]), None);
+    }
+
+    #[test]
     fn test_trim() {
         let args = vec![json!("  hello  ")];
         let result = trim(&args).unwrap();
@@ -274,47 +340,89 @@ mod tests {
     #[test]
     fn test_split() {
         let args = vec![json!(","), json!("a,b,,c")];
-        let result = split(&args).unwrap();
+        let result = split(&args).unwrap().unwrap();
         assert_eq!(result, json!(["a", "b", "", "c"]));
     }
 
     #[test]
     fn test_split_drops_trailing_empty_parts() {
         assert_eq!(
-            split(&[json!(","), json!("a,b,,")]).unwrap(),
+            split(&[json!(","), json!("a,b,,")]).unwrap().unwrap(),
             json!(["a", "b"])
         );
-        assert_eq!(split(&[json!(","), json!(",")]).unwrap(), json!([]));
-        assert_eq!(split(&[json!(","), json!(",a")]).unwrap(), json!(["", "a"]));
-        assert_eq!(split(&[json!(","), json!("")]).unwrap(), json!([""]));
+        assert_eq!(
+            split(&[json!(","), json!(",")]).unwrap().unwrap(),
+            json!([])
+        );
+        assert_eq!(
+            split(&[json!(","), json!(",a")]).unwrap().unwrap(),
+            json!(["", "a"])
+        );
+        assert_eq!(
+            split(&[json!(","), json!("")]).unwrap().unwrap(),
+            json!([""])
+        );
     }
 
     #[test]
     fn test_split_multi_char_separator_is_not_a_regex() {
         let args = vec![json!(". "), json!("a. b.c")];
-        let result = split(&args).unwrap();
+        let result = split(&args).unwrap().unwrap();
         assert_eq!(result, json!(["a", "b.c"]));
     }
 
     #[test]
     fn test_split_without_separator_match() {
         let args = vec![json!("|"), json!("abc")];
-        let result = split(&args).unwrap();
+        let result = split(&args).unwrap().unwrap();
         assert_eq!(result, json!(["abc"]));
     }
 
+    /// Java JOLT's `split` has no value for a null source, so the key is not written.
     #[test]
-    fn test_split_null_input_is_null() {
+    fn test_split_null_input_has_no_value() {
         let args = vec![json!(","), Value::Null];
-        assert_eq!(split(&args).unwrap(), Value::Null);
+        assert_eq!(split(&args).unwrap(), None);
+    }
+
+    #[test]
+    fn test_sole_null_argument_has_no_value() {
+        for name in ["concat", "toLower", "toUpper", "trim"] {
+            assert_eq!(
+                execute_function(name, &[Value::Null]).unwrap(),
+                None,
+                "function {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_concat_skips_null_among_other_arguments() {
+        let args = [json!("x"), Value::Null, json!("y")];
+        assert_eq!(
+            execute_function("concat", &args).unwrap(),
+            Some(json!("xy"))
+        );
+    }
+
+    #[test]
+    fn test_join_skips_null_values() {
+        let args = [json!("_"), json!("a"), Value::Null, json!("b")];
+        assert_eq!(execute_function("join", &args).unwrap(), Some(json!("a_b")));
     }
 
     #[test]
     fn test_split_scalars_are_split_as_text() {
-        assert_eq!(split(&[json!("."), json!(1.5)]).unwrap(), json!(["1", "5"]));
-        assert_eq!(split(&[json!(","), json!(12)]).unwrap(), json!(["12"]));
         assert_eq!(
-            split(&[json!("u"), json!(true)]).unwrap(),
+            split(&[json!("."), json!(1.5)]).unwrap().unwrap(),
+            json!(["1", "5"])
+        );
+        assert_eq!(
+            split(&[json!(","), json!(12)]).unwrap().unwrap(),
+            json!(["12"])
+        );
+        assert_eq!(
+            split(&[json!("u"), json!(true)]).unwrap().unwrap(),
             json!(["tr", "e"])
         );
     }

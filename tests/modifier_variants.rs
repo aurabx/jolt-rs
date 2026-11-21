@@ -507,7 +507,9 @@ fn path_level_above_the_root_is_an_error() {
 
 #[test]
 fn kept_value_does_not_run_its_function() {
-    let spec = json!({"a": "=concat(@(1,missing))"});
+    // A level above the root is an error when the function runs, so a kept value proves it
+    // did not run. A missing key cannot prove this, because it reads as null and is no error.
+    let spec = json!({"a": "=concat(@(9,missing))"});
     assert_all(
         &[DEFAULT, DEFINE],
         json!({"a": "old"}),
@@ -522,6 +524,118 @@ fn kept_value_does_not_run_its_function() {
             "operation `{operation}` got {result:?}"
         );
     }
+}
+
+/// Java JOLT passes `null` for a path the input lacks, and `concat` skips nulls.
+#[test]
+fn missing_key_is_passed_to_the_function_as_null() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"a": {"x": 1}}),
+        json!({"a": {"b": "=concat('x', @(1,missing))"}}),
+        json!({"a": {"x": 1, "b": "x"}}),
+    );
+}
+
+/// As in Java JOLT, a call whose only argument is a missing path has no value. Overwrite then
+/// keeps the existing value instead of replacing it with an empty string.
+#[test]
+fn sole_missing_argument_keeps_an_existing_value_under_overwrite() {
+    for function in ["concat", "toLower", "toUpper", "trim"] {
+        assert_all(
+            &OVERWRITE_NAMES,
+            json!({"PatientID": "PID1"}),
+            json!({"PatientID": format!("={function}(@(1,rawId))")}),
+            json!({"PatientID": "PID1"}),
+        );
+    }
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"tags": ["a"]}),
+        json!({"tags": "=split(',', @(1,rawTags))"}),
+        json!({"tags": ["a"]}),
+    );
+}
+
+#[test]
+fn substring_of_a_missing_key_leaves_the_key_unwritten() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"a": {"x": 1}}),
+        json!({"a": {"b": "=substring(@(1,missing),0,4)"}}),
+        json!({"a": {"x": 1}}),
+    );
+}
+
+#[test]
+fn unknown_function_fails_even_when_its_argument_is_missing() {
+    for operation in OVERWRITE_NAMES {
+        for spec in [
+            json!({"a": "=toLowr(@(1,missing))"}),
+            json!({"a": "=concat(=toLowr(@(1,missing)))"}),
+        ] {
+            let result = transform(json!({}), &parse(operation, spec));
+            assert!(
+                matches!(result, Err(Error::InvalidFunction(_))),
+                "operation `{operation}` got {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn argument_error_does_not_depend_on_argument_order() {
+    for operation in OVERWRITE_NAMES {
+        for spec in [
+            json!({"a": "=concat(=substring(@(1,d),0,4),@(9,x))"}),
+            json!({"a": "=concat(@(9,x),=substring(@(1,d),0,4))"}),
+        ] {
+            let result = transform(json!({"d": ""}), &parse(operation, spec));
+            assert!(
+                matches!(result, Err(Error::PathEvaluationError(_))),
+                "operation `{operation}` got {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_call_with_no_value_leaves_the_key_unwritten() {
+    let spec = json!({"d": "=concat(=substring(@(1,d),0,4),'-')"});
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"d": ""}),
+        spec.clone(),
+        json!({"d": ""}),
+    );
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"d": "2024"}),
+        spec,
+        json!({"d": "2024-"}),
+    );
+}
+
+/// A DICOM date that is empty, null or absent must not fail the whole transform. Only the
+/// entry with a full date gets a formatted value.
+#[test]
+fn date_formatting_skips_entries_without_a_full_date() {
+    let spec = json!({"entry": {"*": {"started": "=concat(=substring(@(1,started),0,4),'-',=substring(@(1,started),4,6),'-',=substring(@(1,started),6,8))"}}});
+    let input = json!({"entry": [
+        {"started": "20241015"},
+        {"started": ""},
+        {"started": null},
+        {"id": "no-date"},
+        {"started": "2024"}
+    ]});
+    let expected = json!({"entry": [
+        {"started": "2024-10-15"},
+        {"started": ""},
+        {"started": null},
+        {"id": "no-date"},
+        {"started": "2024"}
+    ]});
+    assert_all(&OVERWRITE_NAMES, input, spec, expected);
 }
 
 #[test]

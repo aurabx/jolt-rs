@@ -2,9 +2,8 @@ use crate::{Error, Result};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use super::function_parser::FunctionCall;
-use super::functions::execute_function;
 use super::budget::RunBudget;
-use super::evaluator::evaluate_arg;
+use super::evaluator::evaluate_call;
 
 /// Modifier operation variant
 ///
@@ -211,16 +210,12 @@ impl ModifierSpec {
                                 continue;
                             }
 
-                            // Evaluate all arguments
-                            let mut evaluated_args = Vec::new();
-                            for arg in &function_call.args {
-                                let evaluated =
-                                    evaluate_arg(arg, target, root, context, path, budget)?;
-                                evaluated_args.push(evaluated);
-                            }
-
-                            // Execute the function
-                            let result = execute_function(&function_call.name, &evaluated_args)?;
+                            // A call with no value leaves the key unwritten
+                            let Some(result) =
+                                evaluate_call(&function_call, target, root, context, path, budget)?
+                            else {
+                                continue;
+                            };
                             budget.charge_entry(target, key, &result)?;
 
                             let target_map = target.as_object_mut().unwrap();
