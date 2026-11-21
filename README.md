@@ -353,7 +353,7 @@ The `modify-overwrite-beta` operation allows you to modify values using function
 - **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression. Trailing empty parts are dropped, as in Java. A split that would produce more than 100,000 parts fails.
 
 An `@(n,path)` argument that names a key or array index the input lacks reads as `null`, as in Java JOLT. The function decides what `null` means, as in Java JOLT:
-- `concat` and `join` skip `null` among other arguments.
+- `concat` and `join` skip `null` among other arguments. If every argument is `null`, they write `""`, which can replace an existing value under `modify-overwrite-beta`.
 - `null` as the only argument of `concat`, `toLower`, `toUpper` or `trim` has no value.
 - `substring` and `split` of `null` have no value.
 
