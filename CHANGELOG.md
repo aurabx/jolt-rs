@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Upgrade note: modifier calls that used to fail now leave their key unwritten, as in Java JOLT. A transform that relied on these errors to reject an input now succeeds without that key. The entries marked **Breaking** list each change.
+
+### Changed
+- **Breaking:** a modifier argument whose `@(n,path)` names a key or array index that the input lacks has no value. The call has no value, nested calls included, and the key is not written. It used to fail with `PathEvaluationError`. A missing ancestor level is still an error.
+- **Breaking:** `substring` has no value, so its key is not written, when the range is empty, the end runs past the string, the input is not a string, an index is not a non-negative integer, or the argument count is wrong. It used to fail with `FunctionArgumentError`, or stringify a non-string input.
+
+### Fixed
+- `substring` checked its end index against the byte length but sliced by characters. A multi-byte string could pass the check and return a short value. Both now count characters.
+
 ## [0.10.1] - 2026-11-22
 
 ### Added

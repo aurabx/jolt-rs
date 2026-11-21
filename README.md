@@ -347,10 +347,12 @@ The `modify-overwrite-beta` operation allows you to modify values using function
 - **`concat`**: Concatenate multiple strings
 - **`toLower`**: Convert string to lowercase
 - **`toUpper`**: Convert string to uppercase
-- **`substring`**: Extract a substring (start, end)
+- **`substring`**: Extract a substring (start, end). The end index is exclusive and counts characters. A range that is empty or runs past the end of the string has no value, as in Java JOLT, so the key is not written. A non-string input, a wrong argument count and an index that is not a non-negative integer also have no value.
 - **`trim`**: Remove leading/trailing whitespace
 - **`join`**: Join array elements with a separator
 - **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression. Trailing empty parts are dropped, as in Java. A split that would produce more than 100,000 parts fails.
+
+An argument whose `@(n,path)` path names a key or array index that the input lacks has no value. The call then has no value, and the key is not written, as in Java JOLT. A missing ancestor level, such as `@(3,x)` when that object is absent, is still an error, so a path never falls back to reading the root.
 
 There is no date or time function, and `${...}` substitution is not supported. A string such as `${now}` is copied as is. Pass values like the current time in through the input instead.
 

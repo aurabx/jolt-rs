@@ -2,16 +2,19 @@ use crate::error::json_kind;
 use crate::{Error, Result};
 use serde_json::Value;
 
-/// Execute a function by name with given arguments
-pub fn execute_function(name: &str, args: &[Value]) -> Result<Value> {
+/// Execute a function by name with given arguments.
+///
+/// `Ok(None)` means the call has no value, as Java JOLT's `Optional.empty()` does. The caller
+/// then leaves the key unwritten. Only `substring` returns no value today.
+pub fn execute_function(name: &str, args: &[Value]) -> Result<Option<Value>> {
     match name {
-        "concat" => concat(args),
-        "toLower" => to_lower(args),
-        "toUpper" => to_upper(args),
-        "substring" => substring(args),
-        "trim" => trim(args),
-        "join" => join(args),
-        "split" => split(args),
+        "concat" => concat(args).map(Some),
+        "toLower" => to_lower(args).map(Some),
+        "toUpper" => to_upper(args).map(Some),
+        "substring" => Ok(substring(args)),
+        "trim" => trim(args).map(Some),
+        "join" => join(args).map(Some),
+        "split" => split(args).map(Some),
         _ => Err(Error::InvalidFunction(name.to_string())),
     }
 }
@@ -53,49 +56,28 @@ fn to_upper(args: &[Value]) -> Result<Value> {
     Ok(Value::String(s.to_uppercase()))
 }
 
-/// Extract substring from a string
-fn substring(args: &[Value]) -> Result<Value> {
-    if args.len() != 3 {
-        return Err(Error::FunctionArgumentError(format!(
-            "substring expects 3 arguments (string, start, end), got {}",
-            args.len()
-        )));
+/// Take the characters of a string from `start` up to, but not including, `end`.
+///
+/// As in Java JOLT, a call that cannot produce a substring has no value, so its key is not
+/// written. That covers a wrong argument count, an input that is not a string, an index that
+/// is not a non-negative integer, and a range that is empty or runs past the end of the
+/// string. Indices count Unicode scalar values, where Java counts UTF-16 code units, so the
+/// two differ only for characters outside the Basic Multilingual Plane.
+fn substring(args: &[Value]) -> Option<Value> {
+    let [input, start, end] = args else {
+        return None;
+    };
+    let input = input.as_str()?;
+    let start = usize::try_from(start.as_i64()?).ok()?;
+    let end = usize::try_from(end.as_i64()?).ok()?;
+
+    if start >= end || end > input.chars().count() {
+        return None;
     }
 
-    let s = value_to_string(&args[0]);
-    let start = args[1]
-        .as_i64()
-        .ok_or_else(|| Error::FunctionArgumentError("start index must be a number".to_string()))?
-        as usize;
-    let end = args[2]
-        .as_i64()
-        .ok_or_else(|| Error::FunctionArgumentError("end index must be a number".to_string()))?
-        as usize;
-
-    // Validate indices
-    if start > end {
-        return Err(Error::FunctionArgumentError(format!(
-            "start index ({}) must be <= end index ({})",
-            start, end
-        )));
-    }
-
-    if end > s.len() {
-        return Err(Error::FunctionArgumentError(format!(
-            "end index ({}) is out of bounds (string length: {})",
-            end,
-            s.len()
-        )));
-    }
-
-    if start == end {
-        return Err(Error::FunctionArgumentError(
-            "start and end indices cannot be equal".to_string(),
-        ));
-    }
-
-    let result = s.chars().skip(start).take(end - start).collect::<String>();
-    Ok(Value::String(result))
+    Some(Value::String(
+        input.chars().skip(start).take(end - start).collect(),
+    ))
 }
 
 /// Trim whitespace from a string
@@ -255,6 +237,70 @@ mod tests {
         let args = vec![json!("the quick brown fox"), json!(0), json!(9)];
         let result = substring(&args).unwrap();
         assert_eq!(result, json!("the quick"));
+    }
+
+    #[test]
+    fn test_substring_reaches_the_last_character() {
+        let args = vec![json!("the quick brown fox"), json!(16), json!(19)];
+        assert_eq!(substring(&args), Some(json!("fox")));
+    }
+
+    /// The failing cases of Java JOLT's `stringsTests.json`. Each one has no value there.
+    #[test]
+    fn test_substring_has_no_value_where_java_jolt_has_none() {
+        let fox = json!("the quick brown fox");
+        let cases = [
+            ("negative start", vec![fox.clone(), json!(-4), json!(9)]),
+            (
+                "end far past the string",
+                vec![fox.clone(), json!(0), json!(200)],
+            ),
+            (
+                "end one past the string",
+                vec![fox.clone(), json!(0), json!(20)],
+            ),
+            ("input is a number", vec![json!(0), json!(4), json!(9)]),
+            (
+                "empty string, empty range",
+                vec![json!(""), json!(0), json!(0)],
+            ),
+            (
+                "start equals end at zero",
+                vec![json!("abc"), json!(0), json!(0)],
+            ),
+            ("start equals end", vec![json!("abc"), json!(1), json!(1)]),
+            ("start after end", vec![json!("abc"), json!(1), json!(0)]),
+            (
+                "too many arguments",
+                vec![json!("abc"), json!(0), json!(1), json!(2)],
+            ),
+            ("too few arguments", vec![json!("abc"), json!(0)]),
+        ];
+
+        for (name, args) in cases {
+            assert_eq!(substring(&args), None, "case: {name}");
+        }
+    }
+
+    #[test]
+    fn test_substring_of_an_empty_or_null_value_has_no_value() {
+        assert_eq!(substring(&[json!(""), json!(0), json!(4)]), None);
+        assert_eq!(substring(&[Value::Null, json!(0), json!(4)]), None);
+    }
+
+    #[test]
+    fn test_substring_counts_characters_not_bytes() {
+        assert_eq!(
+            substring(&[json!("é"), json!(0), json!(1)]),
+            Some(json!("é"))
+        );
+        assert_eq!(substring(&[json!("é"), json!(0), json!(2)]), None);
+    }
+
+    #[test]
+    fn test_substring_index_must_be_an_integer() {
+        assert_eq!(substring(&[json!("abc"), json!("0"), json!(2)]), None);
+        assert_eq!(substring(&[json!("abc"), json!(0), json!(1.5)]), None);
     }
 
     #[test]

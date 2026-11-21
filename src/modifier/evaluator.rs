@@ -4,7 +4,30 @@ use super::budget::RunBudget;
 use super::function_parser::{FunctionArg, PathExpr, FunctionCall};
 use super::functions::execute_function;
 
-/// Evaluate a function argument against the current data and context
+/// Evaluate every argument of a call. `Ok(None)` means one argument has no value, so the call
+/// has no value either and its key is left unwritten, as in Java JOLT.
+pub fn evaluate_args(
+    args: &[FunctionArg],
+    current: &Value,
+    root: &Value,
+    context: Option<&Value>,
+    path_stack: &[String],
+    budget: &mut RunBudget,
+) -> Result<Option<Vec<Value>>> {
+    let mut evaluated = Vec::with_capacity(args.len());
+    for arg in args {
+        match evaluate_arg(arg, current, root, context, path_stack, budget)? {
+            Some(value) => evaluated.push(value),
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(evaluated))
+}
+
+/// Evaluate a function argument against the current data and context.
+///
+/// `Ok(None)` means the argument has no value: a path names a key or index that the input
+/// lacks, or a nested call has no value.
 pub fn evaluate_arg(
     arg: &FunctionArg,
     current: &Value,
@@ -12,10 +35,10 @@ pub fn evaluate_arg(
     context: Option<&Value>,
     path_stack: &[String],
     budget: &mut RunBudget,
-) -> Result<Value> {
+) -> Result<Option<Value>> {
     match arg {
-        FunctionArg::Literal(s) => Ok(Value::String(s.clone())),
-        FunctionArg::Number(n) => Ok(Value::Number((*n).into())),
+        FunctionArg::Literal(s) => Ok(Some(Value::String(s.clone()))),
+        FunctionArg::Number(n) => Ok(Some(Value::Number((*n).into()))),
         FunctionArg::PathExpr(path_expr) => {
             evaluate_path_expr(path_expr, current, root, path_stack, budget)
         }
@@ -26,7 +49,7 @@ pub fn evaluate_arg(
                     Error::PathEvaluationError(format!("Context key not found: {}", key))
                 })?;
                 budget.charge_value(value)?;
-                Ok(value.clone())
+                Ok(Some(value.clone()))
             } else {
                 Err(Error::PathEvaluationError(
                     "No context provided".to_string(),
@@ -38,9 +61,9 @@ pub fn evaluate_arg(
             match current.get(ident) {
                 Some(value) => {
                     budget.charge_value(value)?;
-                    Ok(value.clone())
+                    Ok(Some(value.clone()))
                 }
-                None => Ok(Value::String(ident.clone())),
+                None => Ok(Some(Value::String(ident.clone()))),
             }
         }
         FunctionArg::Function(nested_call) => {
@@ -58,17 +81,17 @@ fn evaluate_function_call(
     context: Option<&Value>,
     path_stack: &[String],
     budget: &mut RunBudget,
-) -> Result<Value> {
-    // Evaluate all arguments first
-    let mut evaluated_args = Vec::new();
-    for arg in &call.args {
-        let evaluated = evaluate_arg(arg, current, root, context, path_stack, budget)?;
-        evaluated_args.push(evaluated);
-    }
+) -> Result<Option<Value>> {
+    let Some(evaluated_args) =
+        evaluate_args(&call.args, current, root, context, path_stack, budget)?
+    else {
+        return Ok(None);
+    };
 
-    // Execute the nested function with evaluated arguments
     let result = execute_function(&call.name, &evaluated_args)?;
-    budget.charge_value(&result)?;
+    if let Some(value) = &result {
+        budget.charge_value(value)?;
+    }
     Ok(result)
 }
 
@@ -95,7 +118,7 @@ fn evaluate_path_expr(
     root: &Value,
     path_stack: &[String],
     budget: &mut RunBudget,
-) -> Result<Value> {
+) -> Result<Option<Value>> {
     // Get the base value by going up `level` levels
     let base = if path_expr.level == 0 {
         // @(0,...) means reference from root
@@ -127,15 +150,19 @@ fn evaluate_path_expr(
         })?
     };
 
-    // Navigate the path
+    // A missing ancestor level stays an error above. Only the path below an existing level
+    // may name a key the input lacks.
     let value = if path_expr.path.is_empty() {
         base
     } else {
-        navigate_path(base, &path_expr.path)?
+        match navigate_path(base, &path_expr.path)? {
+            Some(value) => value,
+            None => return Ok(None),
+        }
     };
 
     budget.charge_value(value)?;
-    Ok(value.clone())
+    Ok(Some(value.clone()))
 }
 
 /// Get a child by key. An array takes the key as an index, because wildcard walks record
@@ -151,8 +178,11 @@ fn child<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     }
 }
 
-/// Navigate a path like "name[0]" or "lower.leading"
-fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<&'a Value> {
+/// Navigate a path like "name[0]" or "lower.leading".
+///
+/// `Ok(None)` means the input has no value at the path. An error means the path itself is
+/// malformed.
+fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<Option<&'a Value>> {
     let mut current = base;
     let mut remaining = path;
 
@@ -164,8 +194,10 @@ fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<&'a Value> {
 
             // Navigate to the key if not empty
             if !key.is_empty() {
-                current = child(current, key)
-                    .ok_or_else(|| Error::PathEvaluationError(format!("Key not found: {}", key)))?;
+                match child(current, key) {
+                    Some(value) => current = value,
+                    None => return Ok(None),
+                }
             }
 
             // Find the closing bracket
@@ -183,9 +215,10 @@ fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<&'a Value> {
             })?;
 
             // Navigate to the array element
-            current = current.get(index).ok_or_else(|| {
-                Error::PathEvaluationError(format!("Array index out of bounds: {}", index))
-            })?;
+            match current.get(index) {
+                Some(value) => current = value,
+                None => return Ok(None),
+            }
 
             // Update remaining path (skip past the ']')
             remaining = &remaining[close_bracket + 1..];
@@ -198,20 +231,23 @@ fn navigate_path<'a>(base: &'a Value, path: &str) -> Result<&'a Value> {
             // No array notation, check for dot notation
             if let Some(dot_pos) = remaining.find('.') {
                 let key = &remaining[..dot_pos];
-                current = child(current, key)
-                    .ok_or_else(|| Error::PathEvaluationError(format!("Key not found: {}", key)))?;
+                match child(current, key) {
+                    Some(value) => current = value,
+                    None => return Ok(None),
+                }
                 remaining = &remaining[dot_pos + 1..];
             } else {
                 // Last segment
-                current = child(current, remaining).ok_or_else(|| {
-                    Error::PathEvaluationError(format!("Key not found: {}", remaining))
-                })?;
+                match child(current, remaining) {
+                    Some(value) => current = value,
+                    None => return Ok(None),
+                }
                 break;
             }
         }
     }
 
-    Ok(current)
+    Ok(Some(current))
 }
 
 #[cfg(test)]
@@ -226,7 +262,7 @@ mod tests {
             "age": 30
         });
 
-        let result = navigate_path(&data, "name").unwrap();
+        let result = navigate_path(&data, "name").unwrap().unwrap();
         assert_eq!(result, &json!("John"));
     }
 
@@ -238,7 +274,7 @@ mod tests {
             }
         });
 
-        let result = navigate_path(&data, "person.name").unwrap();
+        let result = navigate_path(&data, "person.name").unwrap().unwrap();
         assert_eq!(result, &json!("John"));
     }
 
@@ -248,10 +284,10 @@ mod tests {
             "name": ["John", "Doe"]
         });
 
-        let result = navigate_path(&data, "name[0]").unwrap();
+        let result = navigate_path(&data, "name[0]").unwrap().unwrap();
         assert_eq!(result, &json!("John"));
 
-        let result = navigate_path(&data, "name[1]").unwrap();
+        let result = navigate_path(&data, "name[1]").unwrap().unwrap();
         assert_eq!(result, &json!("Doe"));
     }
 
@@ -261,19 +297,19 @@ mod tests {
             "items": [{ "name": "first" }, { "name": "second" }]
         });
 
-        let result = navigate_path(&data, "items.1.name").unwrap();
+        let result = navigate_path(&data, "items.1.name").unwrap().unwrap();
         assert_eq!(result, &json!("second"));
 
-        assert!(navigate_path(&data, "items.2.name").is_err());
-        assert!(navigate_path(&data, "items.x").is_err());
+        assert_eq!(navigate_path(&data, "items.2.name").unwrap(), None);
+        assert_eq!(navigate_path(&data, "items.x").unwrap(), None);
     }
 
     #[test]
     fn test_navigate_rejects_non_canonical_array_index() {
         let data = json!({ "items": ["p", "q"] });
 
-        assert!(navigate_path(&data, "items.+1").is_err());
-        assert!(navigate_path(&data, "items.01").is_err());
+        assert_eq!(navigate_path(&data, "items.+1").unwrap(), None);
+        assert_eq!(navigate_path(&data, "items.01").unwrap(), None);
     }
 
     #[test]
@@ -281,7 +317,7 @@ mod tests {
         let data = json!({ "a]b": ["p"], "a": { "]": 1 } });
 
         assert!(navigate_path(&data, "a]b[").is_err());
-        assert_eq!(navigate_path(&data, "a]b[0]").unwrap(), &json!("p"));
+        assert_eq!(navigate_path(&data, "a]b[0]").unwrap(), Some(&json!("p")));
     }
 
     #[test]
@@ -300,7 +336,7 @@ mod tests {
             }
         });
 
-        let result = navigate_path(&data, "lower.leading").unwrap();
+        let result = navigate_path(&data, "lower.leading").unwrap().unwrap();
         assert_eq!(result, &json!("hello"));
     }
 }
