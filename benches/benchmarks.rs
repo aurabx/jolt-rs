@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use std::hint::black_box;
 use serde_json::Value;
 use harmony_jolt::{transform, TransformSpec};
 
@@ -7,9 +8,10 @@ pub fn transform_benchmark(c: &mut Criterion) {
         serde_json::from_str(include_str!("spec.json")).expect("parsed transform spec");
     let input: Value = serde_json::from_str(include_str!("input.json")).expect("parsed spec");
     c.bench_function("default op", |b| {
-        b.iter_with_large_setup(
+        b.iter_batched(
             || input.clone(),
             |input| transform(black_box(input), black_box(&spec)),
+            BatchSize::LargeInput,
         )
     });
 }
