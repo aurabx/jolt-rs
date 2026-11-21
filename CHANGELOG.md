@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-22
+
 ### Added
 - A GitHub Actions workflow publishes the crate to crates.io when a version tag is pushed. It uses Trusted Publishing, so no crates.io token is stored. DEVELOPER.md describes the release steps.
+
+### Fixed
+- The `benchmarks` bench target builds again. It called `iter_with_large_setup`, which criterion 0.8 removed, and now uses `iter_batched` with `BatchSize::LargeInput`. It also uses `std::hint::black_box` in place of the deprecated `criterion::black_box`.
 
 ## [0.10.0] - 2026-11-08
 
