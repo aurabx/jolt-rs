@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-22
+
 Upgrade note: some modifier calls that used to fail now succeed, as in Java JOLT. A transform that relied on these errors to reject an input now succeeds. In the harmony proxy, `fail_on_error` no longer catches them. A misspelt key in `@(1,path)` also no longer fails. The entries marked **Breaking** list each change.
 
 ### Changed
