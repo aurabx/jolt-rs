@@ -535,11 +535,25 @@ fn missing_key_is_passed_to_the_function_as_null() {
         json!({"a": {"b": "=concat('x', @(1,missing))"}}),
         json!({"a": {"x": 1, "b": "x"}}),
     );
+}
+
+/// As in Java JOLT, a call whose only argument is a missing path has no value. Overwrite then
+/// keeps the existing value instead of replacing it with an empty string.
+#[test]
+fn sole_missing_argument_keeps_an_existing_value_under_overwrite() {
+    for function in ["concat", "toLower", "toUpper", "trim"] {
+        assert_all(
+            &OVERWRITE_NAMES,
+            json!({"PatientID": "PID1"}),
+            json!({"PatientID": format!("={function}(@(1,rawId))")}),
+            json!({"PatientID": "PID1"}),
+        );
+    }
     assert_all(
         &OVERWRITE_NAMES,
-        json!({"a": "old"}),
-        json!({"a": "=concat(@(1,missing))"}),
-        json!({"a": ""}),
+        json!({"tags": ["a"]}),
+        json!({"tags": "=split(',', @(1,rawTags))"}),
+        json!({"tags": ["a"]}),
     );
 }
 

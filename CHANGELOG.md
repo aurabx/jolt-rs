@@ -11,6 +11,7 @@ Upgrade note: some modifier calls that used to fail now succeed, as in Java JOLT
 
 ### Changed
 - **Breaking:** an `@(n,path)` argument that names a key or array index the input lacks reads as `null`, as in Java JOLT. It used to fail with `PathEvaluationError`. `concat` treats `null` as an empty string, so `=concat('x', @(1,missing))` writes `"x"`. A missing ancestor level and a missing context key are still errors.
+- **Breaking:** `null` as the only argument of `concat`, `toLower`, `toUpper` or `trim` has no value, as in Java JOLT. So does `null` as the string to `split`, which used to write `null`. Under `modify-overwrite-beta`, `=trim(@(1,missing))` now keeps the existing value instead of writing `""`.
 - **Breaking:** `substring` has no value, as in Java JOLT, so its key is not written. That happens when the range is empty, the end runs past the string, the input is not a string (`null` included), an index is not a non-negative integer, or the argument count is wrong. It used to fail with `FunctionArgumentError`, or stringify a non-string input.
 - **Breaking:** a nested call with no value makes the whole call have no value, so its key is not written. Java JOLT has no nested calls. With this rule, `=concat(=substring(@(1,date),0,4),'-',...)` leaves a short or empty date unwritten instead of writing `"--"`.
 - Every argument of a call is evaluated before the call decides it has no value. An argument error no longer depends on argument order. An unknown function name now fails before its arguments are evaluated.
