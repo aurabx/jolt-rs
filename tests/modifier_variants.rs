@@ -508,7 +508,7 @@ fn path_level_above_the_root_is_an_error() {
 #[test]
 fn kept_value_does_not_run_its_function() {
     // A level above the root is an error when the function runs, so a kept value proves it
-    // did not run. A missing key cannot prove this, because it has no value and writes nothing.
+    // did not run. A missing key cannot prove this, because it reads as null and is no error.
     let spec = json!({"a": "=concat(@(9,missing))"});
     assert_all(
         &[DEFAULT, DEFINE],
@@ -526,24 +526,63 @@ fn kept_value_does_not_run_its_function() {
     }
 }
 
+/// Java JOLT passes `null` for a path the input lacks, and `concat` skips nulls.
 #[test]
-fn argument_with_no_value_leaves_the_key_unwritten() {
+fn missing_key_is_passed_to_the_function_as_null() {
     assert_all(
         &ALL_NAMES,
         json!({"a": {"x": 1}}),
-        json!({"a": {"b": "=concat(@(1,missing))"}}),
+        json!({"a": {"b": "=concat('x', @(1,missing))"}}),
+        json!({"a": {"x": 1, "b": "x"}}),
+    );
+    assert_all(
+        &OVERWRITE_NAMES,
+        json!({"a": "old"}),
+        json!({"a": "=concat(@(1,missing))"}),
+        json!({"a": ""}),
+    );
+}
+
+#[test]
+fn substring_of_a_missing_key_leaves_the_key_unwritten() {
+    assert_all(
+        &ALL_NAMES,
+        json!({"a": {"x": 1}}),
+        json!({"a": {"b": "=substring(@(1,missing),0,4)"}}),
         json!({"a": {"x": 1}}),
     );
 }
 
 #[test]
-fn argument_with_no_value_keeps_an_existing_value_under_overwrite() {
-    assert_all(
-        &OVERWRITE_NAMES,
-        json!({"a": "old"}),
-        json!({"a": "=concat(@(1,missing))"}),
-        json!({"a": "old"}),
-    );
+fn unknown_function_fails_even_when_its_argument_is_missing() {
+    for operation in OVERWRITE_NAMES {
+        for spec in [
+            json!({"a": "=toLowr(@(1,missing))"}),
+            json!({"a": "=concat(=toLowr(@(1,missing)))"}),
+        ] {
+            let result = transform(json!({}), &parse(operation, spec));
+            assert!(
+                matches!(result, Err(Error::InvalidFunction(_))),
+                "operation `{operation}` got {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn argument_error_does_not_depend_on_argument_order() {
+    for operation in OVERWRITE_NAMES {
+        for spec in [
+            json!({"a": "=concat(=substring(@(1,d),0,4),@(9,x))"}),
+            json!({"a": "=concat(@(9,x),=substring(@(1,d),0,4))"}),
+        ] {
+            let result = transform(json!({"d": ""}), &parse(operation, spec));
+            assert!(
+                matches!(result, Err(Error::PathEvaluationError(_))),
+                "operation `{operation}` got {result:?}"
+            );
+        }
+    }
 }
 
 #[test]

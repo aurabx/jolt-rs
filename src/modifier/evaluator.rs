@@ -2,33 +2,48 @@ use crate::{Error, Result};
 use serde_json::Value;
 use super::budget::RunBudget;
 use super::function_parser::{FunctionArg, PathExpr, FunctionCall};
-use super::functions::execute_function;
+use super::functions::{execute_function, is_known_function};
 
-/// Evaluate every argument of a call. `Ok(None)` means one argument has no value, so the call
-/// has no value either and its key is left unwritten, as in Java JOLT.
-pub fn evaluate_args(
-    args: &[FunctionArg],
+/// Run a function call against the current data and context.
+///
+/// The name is checked first, so a typo fails whatever the input holds. Every argument is
+/// evaluated before the call decides it has no value, so an argument error does not depend
+/// on argument order. `Ok(None)` means the call has no value, and the caller leaves its key
+/// unwritten. That happens when the function itself has no value, as Java JOLT's
+/// `substring` does, or when a nested call has no value. Java JOLT has no nested calls, so
+/// the second rule is this crate's own.
+pub fn evaluate_call(
+    call: &FunctionCall,
     current: &Value,
     root: &Value,
     context: Option<&Value>,
     path_stack: &[String],
     budget: &mut RunBudget,
-) -> Result<Option<Vec<Value>>> {
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
+) -> Result<Option<Value>> {
+    if !is_known_function(&call.name) {
+        return Err(Error::InvalidFunction(call.name.clone()));
+    }
+
+    let mut evaluated = Vec::with_capacity(call.args.len());
+    let mut has_value = true;
+    for arg in &call.args {
         match evaluate_arg(arg, current, root, context, path_stack, budget)? {
             Some(value) => evaluated.push(value),
-            None => return Ok(None),
+            None => has_value = false,
         }
     }
-    Ok(Some(evaluated))
+    if !has_value {
+        return Ok(None);
+    }
+
+    execute_function(&call.name, &evaluated)
 }
 
 /// Evaluate a function argument against the current data and context.
 ///
-/// `Ok(None)` means the argument has no value: a path names a key or index that the input
-/// lacks, or a nested call has no value.
-pub fn evaluate_arg(
+/// A path that names a key or index the input lacks gives `null`, as in Java JOLT, and the
+/// function decides what that means. `Ok(None)` comes only from a nested call with no value.
+fn evaluate_arg(
     arg: &FunctionArg,
     current: &Value,
     root: &Value,
@@ -40,7 +55,7 @@ pub fn evaluate_arg(
         FunctionArg::Literal(s) => Ok(Some(Value::String(s.clone()))),
         FunctionArg::Number(n) => Ok(Some(Value::Number((*n).into()))),
         FunctionArg::PathExpr(path_expr) => {
-            evaluate_path_expr(path_expr, current, root, path_stack, budget)
+            evaluate_path_expr(path_expr, current, root, path_stack, budget).map(Some)
         }
         FunctionArg::ContextRef(key) => {
             // Context references like ^value look up in the context object
@@ -67,32 +82,13 @@ pub fn evaluate_arg(
             }
         }
         FunctionArg::Function(nested_call) => {
-            // Recursively evaluate nested function call
-            evaluate_function_call(nested_call, current, root, context, path_stack, budget)
+            let result = evaluate_call(nested_call, current, root, context, path_stack, budget)?;
+            if let Some(value) = &result {
+                budget.charge_value(value)?;
+            }
+            Ok(result)
         }
     }
-}
-
-/// Evaluate a nested function call recursively
-fn evaluate_function_call(
-    call: &FunctionCall,
-    current: &Value,
-    root: &Value,
-    context: Option<&Value>,
-    path_stack: &[String],
-    budget: &mut RunBudget,
-) -> Result<Option<Value>> {
-    let Some(evaluated_args) =
-        evaluate_args(&call.args, current, root, context, path_stack, budget)?
-    else {
-        return Ok(None);
-    };
-
-    let result = execute_function(&call.name, &evaluated_args)?;
-    if let Some(value) = &result {
-        budget.charge_value(value)?;
-    }
-    Ok(result)
 }
 
 /// Walk exact path segments from `base`. Segments can come from body keys, so they are never
@@ -118,7 +114,7 @@ fn evaluate_path_expr(
     root: &Value,
     path_stack: &[String],
     budget: &mut RunBudget,
-) -> Result<Option<Value>> {
+) -> Result<Value> {
     // Get the base value by going up `level` levels
     let base = if path_expr.level == 0 {
         // @(0,...) means reference from root
@@ -151,18 +147,18 @@ fn evaluate_path_expr(
     };
 
     // A missing ancestor level stays an error above. Only the path below an existing level
-    // may name a key the input lacks.
+    // may name a key the input lacks, and that key reads as null.
     let value = if path_expr.path.is_empty() {
         base
     } else {
         match navigate_path(base, &path_expr.path)? {
             Some(value) => value,
-            None => return Ok(None),
+            None => return Ok(Value::Null),
         }
     };
 
     budget.charge_value(value)?;
-    Ok(Some(value.clone()))
+    Ok(value.clone())
 }
 
 /// Get a child by key. An array takes the key as an index, because wildcard walks record

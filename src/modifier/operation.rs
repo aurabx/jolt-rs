@@ -2,9 +2,8 @@ use crate::{Error, Result};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use super::function_parser::FunctionCall;
-use super::functions::execute_function;
 use super::budget::RunBudget;
-use super::evaluator::evaluate_args;
+use super::evaluator::evaluate_call;
 
 /// Modifier operation variant
 ///
@@ -211,20 +210,9 @@ impl ModifierSpec {
                                 continue;
                             }
 
-                            // A call with no value leaves the key unwritten, as in Java JOLT
-                            let Some(evaluated_args) = evaluate_args(
-                                &function_call.args,
-                                target,
-                                root,
-                                context,
-                                path,
-                                budget,
-                            )?
-                            else {
-                                continue;
-                            };
+                            // A call with no value leaves the key unwritten
                             let Some(result) =
-                                execute_function(&function_call.name, &evaluated_args)?
+                                evaluate_call(&function_call, target, root, context, path, budget)?
                             else {
                                 continue;
                             };

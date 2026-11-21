@@ -352,7 +352,7 @@ The `modify-overwrite-beta` operation allows you to modify values using function
 - **`join`**: Join array elements with a separator
 - **`split`**: Split a string into an array, for example `=split(',', @(1,tags))`. The separator is a plain string. Java JOLT treats it as a regular expression. Trailing empty parts are dropped, as in Java. A split that would produce more than 100,000 parts fails.
 
-An argument whose `@(n,path)` path names a key or array index that the input lacks has no value. The call then has no value, and the key is not written, as in Java JOLT. A missing ancestor level, such as `@(3,x)` when that object is absent, is still an error, so a path never falls back to reading the root.
+An `@(n,path)` argument that names a key or array index the input lacks reads as `null`, as in Java JOLT. The function decides what `null` means: `concat` treats it as an empty string, and `substring` has no value. A call with no value leaves its key unwritten. A nested call with no value makes the whole call have no value. Java JOLT has no nested calls, so that rule is this crate's own. A missing ancestor level, such as `@(3,x)` when that object is absent, is still an error, so a path never falls back to reading the root. A missing context key (`^key`) is also still an error. An unknown function name is an error even when its arguments are missing.
 
 There is no date or time function, and `${...}` substitution is not supported. A string such as `${now}` is copied as is. Pass values like the current time in through the input instead.
 

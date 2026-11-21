@@ -2,6 +2,22 @@ use crate::error::json_kind;
 use crate::{Error, Result};
 use serde_json::Value;
 
+/// The names `execute_function` accepts.
+const FUNCTION_NAMES: [&str; 7] = [
+    "concat",
+    "toLower",
+    "toUpper",
+    "substring",
+    "trim",
+    "join",
+    "split",
+];
+
+/// Whether `name` is a function `execute_function` can run.
+pub fn is_known_function(name: &str) -> bool {
+    FUNCTION_NAMES.contains(&name)
+}
+
 /// Execute a function by name with given arguments.
 ///
 /// `Ok(None)` means the call has no value, as Java JOLT's `Optional.empty()` does. The caller
